@@ -1,0 +1,12 @@
+{
+  "name": "rust-fuzzy",
+  "version": "0.1.0",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "napi": {
+    "binaryName": "rust-fuzzy"
+  },
+  "scripts": {
+    "build": "napi build --platform --release"
+  }
+}

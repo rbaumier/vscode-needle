@@ -3,7 +3,8 @@
   "displayName": "Go to Fuzzy in current file",
   "description": "go to fuzzy matching chunks in current file",
   "publisher": "rbaumier",
-  "version": "0.0.2",
+  "version": "0.0.4",
+  "license": "MIT",
   "homepage": "https://github.com/rbaumier/vscode-go-to-fuzzy",
   "repository": {
     "type": "git",
@@ -18,13 +19,11 @@
     "theme": "dark"
   },
   "engines": {
-    "vscode": "^1.55.0"
+    "vscode": "^1.80.0"
   },
+  "packageManager": "bun@1.2.21",
   "categories": [
     "Other"
-  ],
-  "activationEvents": [
-    "onCommand:go-to-fuzzy.find"
   ],
   "main": "./out/main.js",
   "contributes": {
@@ -36,26 +35,25 @@
     ]
   },
   "scripts": {
-    "lint": "eslint .",
-    "pretest": "yarn run lint",
-    "test": "node ./test/runTest.js",
-    "vscode:prepublish": "npm run -S esbuild-base -- --minify",
-    "esbuild-base": "esbuild ./src/main.js --bundle --outfile=out/main.js --external:vscode --format=cjs --platform=node",
-    "esbuild": "npm run -S esbuild-base -- --sourcemap",
-    "test-compile": "tsc -p ./"
+    "lint": "biome check ./src",
+    "lint:fix": "biome check --write ./src",
+    "format": "biome format --write ./src",
+    "check": "biome ci ./src",
+    "build": "bun build ./src/main.ts --outdir=./out --target=node --format=cjs --minify --external=vscode",
+    "build:dev": "bun build ./src/main.ts --outdir=./out --target=node --format=cjs --sourcemap=external --external=vscode",
+    "watch": "bun build ./src/main.ts --outdir=./out --target=node --format=cjs --external=vscode --watch",
+    "package": "bun x vsce package --no-dependencies",
+    "publish:vscode": "bun x vsce publish --no-dependencies",
+    "publish:ovsx": "bun x ovsx publish -p $OVSX_TOKEN",
+    "publish:all": "bun run publish:vscode && bun run publish:ovsx"
   },
   "devDependencies": {
-    "@types/glob": "^7.1.3",
-    "@types/mocha": "^8.0.4",
+    "@biomejs/biome": "2.2.6",
     "@types/node": "^12.11.7",
     "@types/vscode": "^1.55.0",
-    "eslint": "^7.19.0",
-    "glob": "^7.1.6",
-    "mocha": "^8.2.1",
-    "typescript": "^4.1.3",
-    "vscode-test": "^1.5.0"
-  },
-  "dependencies": {
-    "shell-quote": "^1.7.2"
+    "@vscode/vsce": "^3.6.2",
+    "ovsx": "^0.10.6",
+    "typescript": "^5.0.0",
+    "ultracite": "5.6.4"
   }
 }

@@ -1,0 +1,27 @@
+{
+  "extends": ["ultracite:recommended"],
+  "rules": {
+    "import-order": {
+      "enabled": true,
+      "groups": [
+        "builtin",
+        "external",
+        "internal",
+        "parent",
+        "sibling",
+        "index"
+      ],
+      "alphabetize": {
+        "order": "asc"
+      }
+    },
+    "no-default-export": {
+      "enabled": false
+    },
+    "prefer-named-exports": {
+      "enabled": true
+    }
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["node_modules", "out", "test-fixtures"]
+}

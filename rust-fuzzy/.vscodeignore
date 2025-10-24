@@ -1,0 +1,22 @@
+.vscode/**
+.vscode-test/**
+src/**
+.gitignore
+.editorconfig
+.prettierrc
+.eslintrc.json
+biome.json
+tsconfig.json
+bun.lockb
+**/*.ts
+**/*.map
+rust-fuzzy/src/**
+rust-fuzzy/target/**
+rust-fuzzy/Cargo.*
+rust-fuzzy/build.rs
+
+# Include only the Rust binary and bindings
+!rust-fuzzy/*.node
+!rust-fuzzy/index.js
+!rust-fuzzy/index.d.ts
+!rust-fuzzy/package.json

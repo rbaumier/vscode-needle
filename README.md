@@ -19,7 +19,17 @@ Go-to-Fuzzy is a VSCode extension making fuzzy search/go-to inside a file possib
 
 ## Installation
 
-[Install from the marketplace!](https://marketplace.visualstudio.com/items?itemName=rbaumier.go-to-fuzzy)
+### VSCode
+
+[Install from the VSCode Marketplace](https://marketplace.visualstudio.com/items?itemName=rbaumier.go-to-fuzzy)
+
+### Cursor
+
+[Install from Open VSX](https://open-vsx.org/extension/rbaumier/go-to-fuzzy)
+
+Or search for "Go to Fuzzy" directly in the Cursor extensions panel.
+
+> **Note:** This extension works on both VSCode and Cursor.
 
 ## 🚀 Usage
 
@@ -50,6 +60,10 @@ Without an extension, there is several ways to go to a targeted pattern in the a
 
 ## ❔ FAQ
 
-### Why do you show the pattern at the beginning of each line? This is annoying!
+### Does this work on Cursor?
 
-Yeah, sorry about that. We show it because otherwise VSCode will rearrange the search results by _"what matches the most the provided pattern"_. We remove this behaviour by using the pattern as the result item `label`, which is the only matchable attribute by default.
+Yes! The extension works on both VSCode and Cursor.
+
+### How are search results ordered?
+
+Results are ordered by fzf's fuzzy matching algorithm, showing the best matches first. The extension preserves fzf's ranking by disabling VSCode's default filtering.
