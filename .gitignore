@@ -3,3 +3,4 @@ node_modules
 *.vsix
 docs # CC generated files
 .env
+rust-fuzzy/target
