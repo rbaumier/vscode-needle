@@ -26,6 +26,9 @@
     "Other"
   ],
   "main": "./out/main.js",
+  "activationEvents": [
+    "onCommand:go-to-fuzzy.find"
+  ],
   "contributes": {
     "commands": [
       {
@@ -41,17 +44,30 @@
     "check": "biome ci ./src",
     "build": "bun build ./src/main.ts --outdir=./out --target=node --format=cjs --minify --external=vscode",
     "build:dev": "bun build ./src/main.ts --outdir=./out --target=node --format=cjs --sourcemap=external --external=vscode",
+    "build:test": "bun build ./test/e2e/extension.e2e.test.ts --outdir=./out/test/e2e --target=node --format=cjs --external=vscode --external=assert --external=mocha",
+    "build:rust": "cd rust-fuzzy && napi build --platform --release",
+    "build:all": "bun run build:rust && bun run build",
+    "clean": "rm -rf out/ *.vsix",
+    "rebuild": "bun run clean && bun run build:all",
     "watch": "bun build ./src/main.ts --outdir=./out --target=node --format=cjs --external=vscode --watch",
+    "test:e2e": "bun run build:dev && bun run build:test && vscode-test",
     "package": "bun x vsce package --no-dependencies",
+    "uninstall": "code --uninstall-extension rbaumier.go-to-fuzzy || true",
+    "install:local": "code --install-extension $(ls -t go-to-fuzzy-*.vsix | head -1)",
+    "reinstall": "bun run uninstall && bun run rebuild && bun run package && bun run install:local && echo '✅ Extension rebuilt and reinstalled successfully!'",
     "publish:vscode": "bun x vsce publish --no-dependencies",
     "publish:ovsx": "bun x ovsx publish -p $OVSX_TOKEN",
     "publish:all": "bun run publish:vscode && bun run publish:ovsx"
   },
   "devDependencies": {
     "@biomejs/biome": "2.2.6",
+    "@types/mocha": "^10.0.10",
     "@types/node": "^12.11.7",
     "@types/vscode": "^1.55.0",
+    "@vscode/test-cli": "^0.0.12",
+    "@vscode/test-electron": "^2.5.2",
     "@vscode/vsce": "^3.6.2",
+    "mocha": "^11.7.4",
     "ovsx": "^0.10.6",
     "typescript": "^5.0.0",
     "ultracite": "5.6.4"
