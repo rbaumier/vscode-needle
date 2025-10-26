@@ -1,6 +1,5 @@
-import * as vscode from "vscode";
-import { fuzzySearch, fuzzySearchDocument, DocumentSource } from "../rust-fuzzy";
-import { log } from "./logger";
+import { Position, type QuickPickItem, Selection, window } from "vscode";
+import { type DocumentSource, type FuzzyMatch, fuzzySearchDocument } from "../rust-fuzzy";
 import { searchCache } from "./cache";
 
 type MatchingInfo = {
@@ -9,7 +8,7 @@ type MatchingInfo = {
   wordStart: number; // Start of whole word containing the match
   wordEnd: number; // End of whole word containing the match
   indices?: number[]; // Individual character indices that matched (for non-contiguous highlights)
-  selection: vscode.Selection; // Selection of the whole word
+  selection: Selection; // Selection of the whole word
 };
 
 type ParsedLine = {
@@ -18,14 +17,16 @@ type ParsedLine = {
   matching: MatchingInfo;
 };
 
-interface QuickPickLineItem extends vscode.QuickPickItem {
+type QuickPickLineItem = QuickPickItem & {
   line: ParsedLine;
-}
+};
+
+const LIMIT_MATCHES = 100;
 
 /**
  * Convert cached FuzzyMatch results to ParsedLine format
  */
-function convertCachedToParseLines(matches: typeof import("../rust-fuzzy").FuzzyMatch[]): ParsedLine[] {
+function convertCachedToParseLines(matches: FuzzyMatch[]): ParsedLine[] {
   return matches.map((match) => {
     const lineNumber = match.lineIndex;
     const lineContent = match.lineContent;
@@ -41,9 +42,9 @@ function convertCachedToParseLines(matches: typeof import("../rust-fuzzy").Fuzzy
         wordStart: selectionStart,
         wordEnd: selectionEnd,
         indices: match.matchIndices,
-        selection: new vscode.Selection(
-          new vscode.Position(lineNumber, selectionStart),
-          new vscode.Position(lineNumber, selectionEnd)
+        selection: new Selection(
+          new Position(lineNumber, selectionStart),
+          new Position(lineNumber, selectionEnd)
         ),
       },
     };
@@ -55,17 +56,12 @@ function convertCachedToParseLines(matches: typeof import("../rust-fuzzy").Fuzzy
  * pattern search it using Rust fuzzy matching
  */
 function findInDocument(pattern: string): ParsedLine[] | null {
-  const startTotal = performance.now();
-  log(`[TS PERF] findInDocument called with pattern: "${pattern}"`);
-
   if (pattern.length === 0) {
-    log("Empty pattern, returning empty array");
     return [];
   }
 
-  const activeDocument = vscode.window.activeTextEditor?.document;
+  const activeDocument = window.activeTextEditor?.document;
   if (!activeDocument) {
-    log("No active document");
     return null;
   }
 
@@ -75,17 +71,14 @@ function findInDocument(pattern: string): ParsedLine[] | null {
   // Check TypeScript cache first
   const cached = searchCache.get(filePath, pattern, fileVersion);
   if (cached) {
-    log(`[TS CACHE HIT] Returning ${cached.length} cached results`);
     return convertCachedToParseLines(cached);
   }
 
   // Determine document source (hybrid approach)
-  const prepareStart = performance.now();
   let documentSource: DocumentSource;
 
   if (activeDocument.isDirty || activeDocument.isUntitled) {
     // Document is dirty or unsaved: pass text content
-    log("[TS] Document is dirty/unsaved, using getText()");
     documentSource = {
       text: activeDocument.getText(),
       path: undefined,
@@ -93,28 +86,18 @@ function findInDocument(pattern: string): ParsedLine[] | null {
   } else {
     // Document is clean and saved: pass file path for Rust to read directly
     const fsPath = activeDocument.uri.fsPath;
-    log(`[TS] Document is clean, using file path: ${fsPath}`);
     documentSource = {
       text: undefined,
       path: fsPath,
     };
   }
-  const prepareTime = performance.now() - prepareStart;
 
-  log(`[TS PERF] Document prepare: ${prepareTime.toFixed(2)}ms`);
-
-  // Call Rust fuzzy search with hybrid document source
-  const startRust = performance.now();
-  const matches = fuzzySearchDocument(documentSource, pattern, 100);
-  const rustTime = performance.now() - startRust;
-
-  log(`[TS PERF] Rust fuzzySearch: ${matches.length} matches in ${rustTime.toFixed(2)}ms`);
+  const matches = fuzzySearchDocument(documentSource, pattern, LIMIT_MATCHES);
 
   // Store in TypeScript cache for future searches
   searchCache.set(filePath, pattern, fileVersion, matches);
 
   // Convert Rust results to ParsedLine format
-  const startConversion = performance.now();
   const result = matches.map((match) => {
     const lineNumber = match.lineIndex;
     const lineContent = match.lineContent;
@@ -122,15 +105,6 @@ function findInDocument(pattern: string): ParsedLine[] | null {
     // Use selection bounds calculated by Rust (Cas A or Cas B)
     const selectionStart = match.selectionStart;
     const selectionEnd = match.selectionEnd;
-
-    // Log selection info for first match (debugging)
-    if (lineNumber === matches[0]?.lineIndex) {
-      log("Selection info for first match:");
-      log(`  Line: "${lineContent}"`);
-      log(`  Match indices: [${match.matchIndices.join(", ")}]`);
-      log(`  Selection range: ${selectionStart}-${selectionEnd}`);
-      log(`  Selected text: "${lineContent.substring(selectionStart, selectionEnd)}"`);
-    }
 
     return {
       number: String(lineNumber + 1),
@@ -141,22 +115,13 @@ function findInDocument(pattern: string): ParsedLine[] | null {
         wordStart: selectionStart, // Selection boundaries (Cas A or B from Rust)
         wordEnd: selectionEnd,
         indices: match.matchIndices, // Individual character positions for non-contiguous highlights
-        selection: new vscode.Selection(
-          new vscode.Position(lineNumber, selectionStart),
-          new vscode.Position(lineNumber, selectionEnd)
+        selection: new Selection(
+          new Position(lineNumber, selectionStart),
+          new Position(lineNumber, selectionEnd)
         ),
       },
     };
   });
-  const conversionTime = performance.now() - startConversion;
-  const totalTime = performance.now() - startTotal;
-
-  log(`[TS PERF] Conversion to ParsedLine: ${conversionTime.toFixed(2)}ms`);
-  log(`[TS PERF] ───────────────────────────────────`);
-  log(`[TS PERF] TOTAL findInDocument: ${totalTime.toFixed(2)}ms`);
-  log(`[TS PERF]   ├─ Document prepare:  ${prepareTime.toFixed(2)}ms (${((prepareTime/totalTime)*100).toFixed(1)}%)`);
-  log(`[TS PERF]   ├─ Rust fuzzySearch:  ${rustTime.toFixed(2)}ms (${((rustTime/totalTime)*100).toFixed(1)}%)`);
-  log(`[TS PERF]   └─ Result conversion: ${conversionTime.toFixed(2)}ms (${((conversionTime/totalTime)*100).toFixed(1)}%)`);
 
   return result;
 }
@@ -166,14 +131,11 @@ function findInDocument(pattern: string): ParsedLine[] | null {
  * and return the matching lines as vscode quickPick items
  */
 export default function search(pattern: string): QuickPickLineItem[] {
-  const startSearch = performance.now();
-
   const matchingLines = findInDocument(pattern);
   if (!matchingLines) {
     return [];
   }
 
-  const startItemCreation = performance.now();
   const items = matchingLines.map((line, i) => {
     const { number, content, matching } = line;
 
@@ -210,15 +172,6 @@ export default function search(pattern: string): QuickPickLineItem[] {
       highlights.push([prefixLength + matching.start, prefixLength + matching.end]);
     }
 
-    if (i === 0) {
-      log("First item highlight calculation:");
-      log(`  Content: "${content}"`);
-      log(`  Match indices: [${matching.indices?.join(", ")}]`);
-      log(`  Word selection positions: ${matching.wordStart}-${matching.wordEnd}`);
-      log(`  Word selected: "${content.substring(matching.wordStart, matching.wordEnd)}"`);
-      log(`  Highlights: ${JSON.stringify(highlights)}`);
-    }
-
     return {
       label: `${number}: ${content}`,
       description: "",
@@ -228,14 +181,6 @@ export default function search(pattern: string): QuickPickLineItem[] {
       line,
     };
   });
-
-  const itemCreationTime = performance.now() - startItemCreation;
-  const totalSearchTime = performance.now() - startSearch;
-
-  log(`[TS PERF] QuickPick item creation: ${itemCreationTime.toFixed(2)}ms`);
-  log(`[TS PERF] ═══════════════════════════════════`);
-  log(`[TS PERF] TOTAL SEARCH TIME: ${totalSearchTime.toFixed(2)}ms`);
-  log(`[TS PERF] ═══════════════════════════════════\n`);
 
   return items;
 }
