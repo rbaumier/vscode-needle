@@ -4,3 +4,4 @@ node_modules
 docs # CC generated files
 .env
 rust-fuzzy/target
+out
