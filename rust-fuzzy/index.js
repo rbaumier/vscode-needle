@@ -118,6 +118,8 @@ if (!nativeBinding) {
   throw new Error('Failed to load native binding');
 }
 
-const { fuzzySearch } = nativeBinding;
+const { fuzzySearch, fuzzySearchDocument, DocumentSource } = nativeBinding;
 
 module.exports.fuzzySearch = fuzzySearch;
+module.exports.fuzzySearchDocument = fuzzySearchDocument;
+module.exports.DocumentSource = DocumentSource;

@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
+import { clearLog, getLogPath, log } from "./logger";
 import search from "./search";
-import { log, getLogPath, clearLog } from "./logger";
+import { searchCache } from "./cache";
 
 const INPUT_PLACEHOLDER = "Please input your search pattern.";
 const EMPTY_PATTERN = "";
@@ -12,7 +13,7 @@ const COMMANDS = {
 export function applySelectionFromItem(item: any): boolean {
   log("applySelectionFromItem called");
 
-  if (!item || !item.line || !item.line.matching || !item.line.matching.selection) {
+  if (!(item && item.line && item.line.matching && item.line.matching.selection)) {
     log("  Invalid item structure");
     return false;
   }
@@ -25,7 +26,7 @@ export function applySelectionFromItem(item: any): boolean {
   const selection = item.line.matching.selection;
   log("  Applying selection:", {
     start: { line: selection.start.line, character: selection.start.character },
-    end: { line: selection.end.line, character: selection.end.character }
+    end: { line: selection.end.line, character: selection.end.character },
   });
 
   vscode.window.activeTextEditor.selections = [selection];
@@ -42,6 +43,14 @@ export function activate(context: vscode.ExtensionContext): void {
 
   vscode.window.showInformationMessage(`go-to-fuzzy log: ${getLogPath()}`);
 
+  // Invalidate TypeScript cache when document is modified
+  const docChangeDisposable = vscode.workspace.onDidChangeTextDocument((event) => {
+    const filePath = event.document.uri.fsPath;
+    searchCache.invalidateFile(filePath);
+  });
+
+  context.subscriptions.push(docChangeDisposable);
+
   const disposable = vscode.commands.registerCommand(COMMANDS.FIND, async () => {
     log("Command 'find' triggered");
 
@@ -49,6 +58,8 @@ export function activate(context: vscode.ExtensionContext): void {
     const editor = vscode.window.activeTextEditor;
     const originalSelection = editor?.selection;
     let itemAccepted = false; // Track if user accepted an item
+    let isPickerActive = true; // Track if picker is still open
+    let navigationTimeout: NodeJS.Timeout | undefined; // Debounce navigation
 
     log("Initial search with empty pattern");
     const items = await search(EMPTY_PATTERN);
@@ -109,7 +120,7 @@ export function activate(context: vscode.ExtensionContext): void {
             const selection = firstItem.line.matching.selection;
             log("  Selection object:", {
               start: { line: selection.start.line, character: selection.start.character },
-              end: { line: selection.end.line, character: selection.end.character }
+              end: { line: selection.end.line, character: selection.end.character },
             });
 
             applySelectionFromItem(firstItem);
@@ -141,7 +152,7 @@ export function activate(context: vscode.ExtensionContext): void {
     // (selection already done in onDidChangeActive)
     quickPick.onDidAccept(() => {
       log("onDidAccept triggered - closing QuickPick");
-      itemAccepted = true;  // Mark that user accepted (pressed Enter)
+      itemAccepted = true; // Mark that user accepted (pressed Enter)
       quickPick.hide();
     });
 

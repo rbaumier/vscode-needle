@@ -1,14 +1,15 @@
 import * as vscode from "vscode";
-import { fuzzySearch } from "../rust-fuzzy";
+import { fuzzySearch, fuzzySearchDocument, DocumentSource } from "../rust-fuzzy";
 import { log } from "./logger";
+import { searchCache } from "./cache";
 
 type MatchingInfo = {
-  start: number;  // Start of matched pattern in line
-  end: number;    // End of matched pattern in line
-  wordStart: number;  // Start of whole word containing the match
-  wordEnd: number;    // End of whole word containing the match
-  indices?: number[];  // Individual character indices that matched (for non-contiguous highlights)
-  selection: vscode.Selection;  // Selection of the whole word
+  start: number; // Start of matched pattern in line
+  end: number; // End of matched pattern in line
+  wordStart: number; // Start of whole word containing the match
+  wordEnd: number; // End of whole word containing the match
+  indices?: number[]; // Individual character indices that matched (for non-contiguous highlights)
+  selection: vscode.Selection; // Selection of the whole word
 };
 
 type ParsedLine = {
@@ -22,11 +23,40 @@ interface QuickPickLineItem extends vscode.QuickPickItem {
 }
 
 /**
+ * Convert cached FuzzyMatch results to ParsedLine format
+ */
+function convertCachedToParseLines(matches: typeof import("../rust-fuzzy").FuzzyMatch[]): ParsedLine[] {
+  return matches.map((match) => {
+    const lineNumber = match.lineIndex;
+    const lineContent = match.lineContent;
+    const selectionStart = match.selectionStart;
+    const selectionEnd = match.selectionEnd;
+
+    return {
+      number: String(lineNumber + 1),
+      content: lineContent,
+      matching: {
+        start: match.matchStart,
+        end: match.matchEnd,
+        wordStart: selectionStart,
+        wordEnd: selectionEnd,
+        indices: match.matchIndices,
+        selection: new vscode.Selection(
+          new vscode.Position(lineNumber, selectionStart),
+          new vscode.Position(lineNumber, selectionEnd)
+        ),
+      },
+    };
+  });
+}
+
+/**
  * Get the active (focused) vscode document,
  * pattern search it using Rust fuzzy matching
  */
-async function findInDocument(pattern: string): Promise<ParsedLine[] | null> {
-  log(`findInDocument called with pattern: "${pattern}"`);
+function findInDocument(pattern: string): ParsedLine[] | null {
+  const startTotal = performance.now();
+  log(`[TS PERF] findInDocument called with pattern: "${pattern}"`);
 
   if (pattern.length === 0) {
     log("Empty pattern, returning empty array");
@@ -39,88 +69,65 @@ async function findInDocument(pattern: string): Promise<ParsedLine[] | null> {
     return null;
   }
 
-  // Split document into lines
-  const lines = activeDocument.getText().split("\n");
-  log(`Document has ${lines.length} lines`);
-  log(`First 3 lines:`, lines.slice(0, 3));
+  const filePath = activeDocument.uri.fsPath;
+  const fileVersion = activeDocument.version;
 
-  // Call Rust fuzzy search
-  log("Calling Rust fuzzySearch...");
-  const matches = fuzzySearch(lines, pattern, 100);
-  log(`Rust returned ${matches.length} matches`);
-
-  if (matches.length > 0) {
-    log("First 3 matches:", matches.slice(0, 3));
-  } else {
-    log("No matches found!");
+  // Check TypeScript cache first
+  const cached = searchCache.get(filePath, pattern, fileVersion);
+  if (cached) {
+    log(`[TS CACHE HIT] Returning ${cached.length} cached results`);
+    return convertCachedToParseLines(cached);
   }
 
+  // Determine document source (hybrid approach)
+  const prepareStart = performance.now();
+  let documentSource: DocumentSource;
+
+  if (activeDocument.isDirty || activeDocument.isUntitled) {
+    // Document is dirty or unsaved: pass text content
+    log("[TS] Document is dirty/unsaved, using getText()");
+    documentSource = {
+      text: activeDocument.getText(),
+      path: undefined,
+    };
+  } else {
+    // Document is clean and saved: pass file path for Rust to read directly
+    const fsPath = activeDocument.uri.fsPath;
+    log(`[TS] Document is clean, using file path: ${fsPath}`);
+    documentSource = {
+      text: undefined,
+      path: fsPath,
+    };
+  }
+  const prepareTime = performance.now() - prepareStart;
+
+  log(`[TS PERF] Document prepare: ${prepareTime.toFixed(2)}ms`);
+
+  // Call Rust fuzzy search with hybrid document source
+  const startRust = performance.now();
+  const matches = fuzzySearchDocument(documentSource, pattern, 100);
+  const rustTime = performance.now() - startRust;
+
+  log(`[TS PERF] Rust fuzzySearch: ${matches.length} matches in ${rustTime.toFixed(2)}ms`);
+
+  // Store in TypeScript cache for future searches
+  searchCache.set(filePath, pattern, fileVersion, matches);
+
   // Convert Rust results to ParsedLine format
-  return matches.map((match) => {
+  const startConversion = performance.now();
+  const result = matches.map((match) => {
     const lineNumber = match.lineIndex;
     const lineContent = match.lineContent;
 
-    // Find all words in the line with their positions
-    const wordRegex = /\w+/g;
-    const words: Array<{ start: number; end: number }> = [];
-    let wordMatch;
-    while ((wordMatch = wordRegex.exec(lineContent)) !== null) {
-      words.push({
-        start: wordMatch.index,
-        end: wordMatch.index + wordMatch[0].length,
-      });
-    }
+    // Use selection bounds calculated by Rust (Cas A or Cas B)
+    const selectionStart = match.selectionStart;
+    const selectionEnd = match.selectionEnd;
 
-    // Find which words contain highlighted characters
-    const highlightedWordIndices = new Set<number>();
-
-    // DEBUG: Log matchIndices for ALL lines
-    log(`DEBUG line ${lineNumber}: matchIndices = ${match.matchIndices ? `[${match.matchIndices.join(', ')}]` : 'UNDEFINED'}, length = ${match.matchIndices?.length || 0}`);
-
-    for (const charIndex of match.matchIndices) {
-      for (let i = 0; i < words.length; i++) {
-        const word = words[i];
-        if (charIndex >= word.start && charIndex < word.end) {
-          highlightedWordIndices.add(i);
-          break;
-        }
-      }
-    }
-
-    // Determine selection based on distribution of highlighted characters
-    let selectionStart: number;
-    let selectionEnd: number;
-    let selectionCase: string;
-
-    if (highlightedWordIndices.size === 0) {
-      // Fallback: no words found (shouldn't happen)
-      selectionStart = match.matchStart;
-      selectionEnd = match.matchEnd;
-      selectionCase = "Fallback";
-    } else if (highlightedWordIndices.size === 1) {
-      // Cas A: All highlights in ONE word → select that entire word
-      const wordIndex = Array.from(highlightedWordIndices)[0];
-      selectionStart = words[wordIndex].start;
-      selectionEnd = words[wordIndex].end;
-      selectionCase = "Cas A (1 word)";
-    } else {
-      // Cas B: Highlights span MULTIPLE words → select from first to last word
-      const wordIndices = Array.from(highlightedWordIndices).sort((a, b) => a - b);
-      const firstWordIndex = wordIndices[0];
-      const lastWordIndex = wordIndices[wordIndices.length - 1];
-      selectionStart = words[firstWordIndex].start;
-      selectionEnd = words[lastWordIndex].end;
-      selectionCase = `Cas B (${highlightedWordIndices.size} words)`;
-    }
-
-    // Log selection logic for debugging
+    // Log selection info for first match (debugging)
     if (lineNumber === matches[0]?.lineIndex) {
-      log(`Selection logic for first match:`);
+      log("Selection info for first match:");
       log(`  Line: "${lineContent}"`);
-      log(`  Match indices: [${match.matchIndices.join(', ')}]`);
-      log(`  Words found: ${words.length}`);
-      log(`  Highlighted word indices: [${Array.from(highlightedWordIndices).join(', ')}]`);
-      log(`  Selection case: ${selectionCase}`);
+      log(`  Match indices: [${match.matchIndices.join(", ")}]`);
       log(`  Selection range: ${selectionStart}-${selectionEnd}`);
       log(`  Selected text: "${lineContent.substring(selectionStart, selectionEnd)}"`);
     }
@@ -129,11 +136,11 @@ async function findInDocument(pattern: string): Promise<ParsedLine[] | null> {
       number: String(lineNumber + 1),
       content: lineContent,
       matching: {
-        start: match.matchStart,  // Keep pattern position for highlighting
+        start: match.matchStart, // Pattern position for highlighting
         end: match.matchEnd,
-        wordStart: selectionStart,     // Selection boundaries (Cas A or B)
+        wordStart: selectionStart, // Selection boundaries (Cas A or B from Rust)
         wordEnd: selectionEnd,
-        indices: match.matchIndices,  // Individual character positions for non-contiguous highlights
+        indices: match.matchIndices, // Individual character positions for non-contiguous highlights
         selection: new vscode.Selection(
           new vscode.Position(lineNumber, selectionStart),
           new vscode.Position(lineNumber, selectionEnd)
@@ -141,17 +148,32 @@ async function findInDocument(pattern: string): Promise<ParsedLine[] | null> {
       },
     };
   });
+  const conversionTime = performance.now() - startConversion;
+  const totalTime = performance.now() - startTotal;
+
+  log(`[TS PERF] Conversion to ParsedLine: ${conversionTime.toFixed(2)}ms`);
+  log(`[TS PERF] ───────────────────────────────────`);
+  log(`[TS PERF] TOTAL findInDocument: ${totalTime.toFixed(2)}ms`);
+  log(`[TS PERF]   ├─ Document prepare:  ${prepareTime.toFixed(2)}ms (${((prepareTime/totalTime)*100).toFixed(1)}%)`);
+  log(`[TS PERF]   ├─ Rust fuzzySearch:  ${rustTime.toFixed(2)}ms (${((rustTime/totalTime)*100).toFixed(1)}%)`);
+  log(`[TS PERF]   └─ Result conversion: ${conversionTime.toFixed(2)}ms (${((conversionTime/totalTime)*100).toFixed(1)}%)`);
+
+  return result;
 }
 
 /**
  * Perform a search against a document
  * and return the matching lines as vscode quickPick items
  */
-export default async function search(pattern: string): Promise<QuickPickLineItem[]> {
-  const matchingLines = await findInDocument(pattern);
+export default function search(pattern: string): QuickPickLineItem[] {
+  const startSearch = performance.now();
+
+  const matchingLines = findInDocument(pattern);
   if (!matchingLines) {
     return [];
   }
+
+  const startItemCreation = performance.now();
   const items = matchingLines.map((line, i) => {
     const { number, content, matching } = line;
 
@@ -189,9 +211,9 @@ export default async function search(pattern: string): Promise<QuickPickLineItem
     }
 
     if (i === 0) {
-      log(`First item highlight calculation:`);
+      log("First item highlight calculation:");
       log(`  Content: "${content}"`);
-      log(`  Match indices: [${matching.indices?.join(', ')}]`);
+      log(`  Match indices: [${matching.indices?.join(", ")}]`);
       log(`  Word selection positions: ${matching.wordStart}-${matching.wordEnd}`);
       log(`  Word selected: "${content.substring(matching.wordStart, matching.wordEnd)}"`);
       log(`  Highlights: ${JSON.stringify(highlights)}`);
@@ -202,15 +224,18 @@ export default async function search(pattern: string): Promise<QuickPickLineItem
       description: "",
       picked: i === 0,
       alwaysShow: true,
-      highlights: highlights,
+      highlights,
       line,
     };
   });
 
-  log(`Returning ${items.length} QuickPick items`);
-  if (items.length > 0) {
-    log(`First item: ${items[0].label}`);
-  }
+  const itemCreationTime = performance.now() - startItemCreation;
+  const totalSearchTime = performance.now() - startSearch;
+
+  log(`[TS PERF] QuickPick item creation: ${itemCreationTime.toFixed(2)}ms`);
+  log(`[TS PERF] ═══════════════════════════════════`);
+  log(`[TS PERF] TOTAL SEARCH TIME: ${totalSearchTime.toFixed(2)}ms`);
+  log(`[TS PERF] ═══════════════════════════════════\n`);
 
   return items;
 }
