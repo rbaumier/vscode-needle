@@ -1,19 +1,14 @@
 {
+  "exclude": ["node_modules", "out", "test-fixtures", "rust-fuzzy"],
   "extends": ["ultracite:recommended"],
+  "include": ["src/**/*.ts"],
   "rules": {
     "import-order": {
-      "enabled": true,
-      "groups": [
-        "builtin",
-        "external",
-        "internal",
-        "parent",
-        "sibling",
-        "index"
-      ],
       "alphabetize": {
         "order": "asc"
-      }
+      },
+      "enabled": true,
+      "groups": ["builtin", "external", "internal", "parent", "sibling", "index"]
     },
     "no-default-export": {
       "enabled": false
@@ -21,7 +16,5 @@
     "prefer-named-exports": {
       "enabled": true
     }
-  },
-  "include": ["src/**/*.ts"],
-  "exclude": ["node_modules", "out", "test-fixtures"]
+  }
 }

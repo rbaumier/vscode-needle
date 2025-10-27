@@ -45,7 +45,7 @@
     "build": "bun build ./src/main.ts --outdir=./out --target=node --format=cjs --minify --external=vscode",
     "build:dev": "bun build ./src/main.ts --outdir=./out --target=node --format=cjs --sourcemap=external --external=vscode",
     "build:test": "bun build ./test/e2e/extension.e2e.test.ts --outdir=./out/test/e2e --target=node --format=cjs --external=vscode --external=assert --external=mocha",
-    "build:rust": "cd rust-fuzzy && napi build --platform --release",
+    "build:rust": "cd rust-fuzzy && napi build --platform --release --dts index.d.ts",
     "build:all": "bun run build:rust && bun run build",
     "clean": "rm -rf out/ *.vsix",
     "rebuild": "bun run clean && bun run build:all",
