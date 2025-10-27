@@ -1,38 +1,13 @@
 use napi_derive::napi;
 use nucleo_matcher::{Matcher, Config, Utf32String};
 use nucleo_matcher::pattern::{Pattern, CaseMatching, Normalization};
+use std::time::Instant;
 
 /// Word structure for selection bounds calculation
 #[derive(Debug)]
 struct Word {
     start: usize,
     end: usize,
-}
-
-/// Calculate highlights from match indices
-/// Groups consecutive indices into [start, end] ranges
-fn calculate_highlights(indices: &[u32]) -> Vec<Vec<u32>> {
-    if indices.is_empty() {
-        return vec![];
-    }
-
-    let mut highlights: Vec<Vec<u32>> = Vec::new();
-    let mut range_start = indices[0];
-    let mut range_end = indices[0] + 1;
-
-    for i in 1..indices.len() {
-        let current_idx = indices[i];
-        if current_idx == range_end {
-            range_end = current_idx + 1;
-        } else {
-            highlights.push(vec![range_start, range_end]);
-            range_start = current_idx;
-            range_end = current_idx + 1;
-        }
-    }
-    highlights.push(vec![range_start, range_end]);
-
-    highlights
 }
 
 /// Calculate selection bounds following TypeScript logic (Cas A or Cas B)
@@ -103,6 +78,35 @@ fn calculate_selection_bounds(
     }
 }
 
+/// Calculate highlight ranges from match indices
+/// Groups consecutive indices into [start, end] ranges
+fn calculate_highlights(indices: &[u32]) -> Vec<Vec<u32>> {
+    if indices.is_empty() {
+        return vec![];
+    }
+
+    let mut highlights: Vec<Vec<u32>> = Vec::new();
+    let mut range_start = indices[0];
+    let mut range_end = indices[0] + 1;
+
+    for i in 1..indices.len() {
+        let current_idx = indices[i];
+        if current_idx == range_end {
+            // Consecutive index, extend the range
+            range_end = current_idx + 1;
+        } else {
+            // Gap found, save current range and start new one
+            highlights.push(vec![range_start, range_end]);
+            range_start = current_idx;
+            range_end = current_idx + 1;
+        }
+    }
+    // Add the last range
+    highlights.push(vec![range_start, range_end]);
+
+    highlights
+}
+
 #[napi(object)]
 pub struct FuzzyMatch {
     pub line_index: u32,
@@ -113,7 +117,7 @@ pub struct FuzzyMatch {
     pub match_indices: Vec<u32>,  // Individual character positions that matched
     pub selection_start: u32,     // Start of selection (Cas A or B)
     pub selection_end: u32,       // End of selection (Cas A or B)
-    pub highlights: Vec<Vec<u32>>, // Highlight ranges [start, end]
+    pub highlights: Vec<Vec<u32>>, // Array of [start, end] pairs for highlighting
 }
 
 /// Document source: either text content or file path
@@ -132,11 +136,16 @@ pub fn fuzzy_search_document(source: DocumentSource, pattern: String, limit: Opt
     use std::fs;
     use std::io::{self, BufRead};
 
+    let total_start = Instant::now();
+
     if pattern.is_empty() {
         return vec![];
     }
 
     // Read document: either from text or file path
+    #[cfg(feature = "perf-logging")]
+    let read_start = Instant::now();
+
     let lines: Vec<String> = if let Some(text) = source.text {
         // Text provided: split into lines
         text.lines().map(|s| s.to_string()).collect()
@@ -150,33 +159,44 @@ pub fn fuzzy_search_document(source: DocumentSource, pattern: String, limit: Opt
                     .collect()
             }
             Err(_e) => {
+                #[cfg(feature = "perf-logging")]
                 eprintln!("[RUST ERROR] Failed to read file '{}': {}", path, _e);
                 return vec![];
             }
         }
     } else {
+        #[cfg(feature = "perf-logging")]
         eprintln!("[RUST ERROR] DocumentSource must have either text or path");
         return vec![];
     };
 
+    #[cfg(feature = "perf-logging")]
+    {
+        let read_time = read_start.elapsed();
+        eprintln!("[RUST PERF] Read document:       {:>8.2?} ({} lines)", read_time, lines.len());
+    }
+
     // Call existing fuzzy_search logic
-    fuzzy_search_internal(lines, pattern, limit)
+    fuzzy_search_internal(lines, pattern, limit, total_start)
 }
 
 /// Legacy function for backward compatibility (deprecated)
 /// Use fuzzy_search_document instead
 #[napi]
 pub fn fuzzy_search(lines: Vec<String>, pattern: String, limit: Option<u32>) -> Vec<FuzzyMatch> {
-    fuzzy_search_internal(lines, pattern, limit)
+    fuzzy_search_internal(lines, pattern, limit, Instant::now())
 }
 
 /// Internal fuzzy search implementation
-fn fuzzy_search_internal(lines: Vec<String>, pattern: String, limit: Option<u32>) -> Vec<FuzzyMatch> {
+fn fuzzy_search_internal(lines: Vec<String>, pattern: String, limit: Option<u32>, #[allow(unused_variables)] total_start: Instant) -> Vec<FuzzyMatch> {
     if pattern.is_empty() {
         return vec![];
     }
 
     let limit = limit.unwrap_or(100) as usize;
+
+    #[cfg(feature = "perf-logging")]
+    let init_start = Instant::now();
 
     let nucleo_pattern = Pattern::parse(
         &pattern,
@@ -184,9 +204,14 @@ fn fuzzy_search_internal(lines: Vec<String>, pattern: String, limit: Option<u32>
         Normalization::Never,   // No Unicode normalization
     );
 
+    #[cfg(feature = "perf-logging")]
+    let init_time = init_start.elapsed();
+
     // Calculate scores and filter out non-matching lines
     // Note: Parallelization with Rayon was tested but Pattern cannot be shared between threads
     // Each thread would need to recreate the pattern, which is slower than sequential processing
+    #[cfg(feature = "perf-logging")]
+    let matching_start = Instant::now();
 
     // Use sequential iteration (fastest for Nucleo pattern matching)
     let mut matcher = Matcher::new(Config::DEFAULT);
@@ -204,10 +229,28 @@ fn fuzzy_search_internal(lines: Vec<String>, pattern: String, limit: Option<u32>
         }
     }
 
+    #[cfg(feature = "perf-logging")]
+    let matching_total_time = matching_start.elapsed();
+
     // Sort by score (descending) - best matches first
+    #[cfg(feature = "perf-logging")]
+    let sort_start = Instant::now();
+
     results.sort_by(|a, b| b.1.cmp(&a.1));
 
+    #[cfg(feature = "perf-logging")]
+    let sort_time = sort_start.elapsed();
+
+    // Store match count before consuming results
+    #[cfg(feature = "perf-logging")]
+    let match_count = results.len();
+
     // Take top matches and convert to FuzzyMatch
+    #[cfg(feature = "perf-logging")]
+    let conversion_start = Instant::now();
+    #[cfg(feature = "perf-logging")]
+    let mut selection_bounds_time = std::time::Duration::ZERO;
+
     let output = results
         .into_iter()
         .take(limit)
@@ -222,7 +265,15 @@ fn fuzzy_search_internal(lines: Vec<String>, pattern: String, limit: Option<u32>
             };
 
             // Calculate selection bounds using the helper function
+            #[cfg(feature = "perf-logging")]
+            let bounds_start = Instant::now();
+
             let (sel_start, sel_end) = calculate_selection_bounds(&lines[idx], &indices);
+
+            #[cfg(feature = "perf-logging")]
+            {
+                selection_bounds_time += bounds_start.elapsed();
+            }
 
             FuzzyMatch {
                 line_index: idx as u32,
@@ -237,6 +288,28 @@ fn fuzzy_search_internal(lines: Vec<String>, pattern: String, limit: Option<u32>
             }
         })
         .collect();
+
+    #[cfg(feature = "perf-logging")]
+    let conversion_time = conversion_start.elapsed();
+    #[cfg(feature = "perf-logging")]
+    let total_time = total_start.elapsed();
+
+    // Log performance metrics
+    #[cfg(feature = "perf-logging")]
+    {
+        eprintln!("[RUST PERF] Total lines: {}", lines.len());
+        eprintln!("[RUST PERF] Pattern: '{}' (length: {})", pattern, pattern.len());
+        eprintln!("[RUST PERF] Matches found: {}", match_count);
+        eprintln!("[RUST PERF] ───────────────────────────────────");
+        eprintln!("[RUST PERF] Init Nucleo:         {:>8.2?}", init_time);
+        eprintln!("[RUST PERF] Matching phase:      {:>8.2?}", matching_total_time);
+        eprintln!("[RUST PERF] Sort results:        {:>8.2?}", sort_time);
+        eprintln!("[RUST PERF] Conversion:          {:>8.2?}", conversion_time);
+        eprintln!("[RUST PERF]   └─ Selection bounds:{:>8.2?}", selection_bounds_time);
+        eprintln!("[RUST PERF] ───────────────────────────────────");
+        eprintln!("[RUST PERF] TOTAL TIME:          {:>8.2?}", total_time);
+        eprintln!("[RUST PERF] ═══════════════════════════════════\n");
+    }
 
     output
 }

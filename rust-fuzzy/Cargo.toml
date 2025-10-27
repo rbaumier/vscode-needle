@@ -14,11 +14,11 @@ nucleo-matcher = "0.3"
 [build-dependencies]
 napi-build = "2"
 
-[features]
-perf-logging = []
-
 [profile.release]
 opt-level = 3
 lto = true
 codegen-units = 1
 strip = true
+
+[package.metadata.napi]
+name = "rust-fuzzy"

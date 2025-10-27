@@ -1,5 +1,5 @@
-const { existsSync, readFileSync } = require('node:fs');
-const { join } = require('node:path');
+const { existsSync, readFileSync } = require("node:fs");
+const { join } = require("node:path");
 
 const { platform, arch } = process;
 
@@ -8,10 +8,10 @@ let localFileExisted = false;
 let loadError = null;
 
 function isMusl() {
-  if (!process.report || typeof process.report.getReport !== 'function') {
+  if (!process.report || typeof process.report.getReport !== "function") {
     try {
-      const lddPath = require('node:child_process').execSync('which ldd').toString().trim();
-      return readFileSync(lddPath, 'utf8').includes('musl');
+      const lddPath = require("node:child_process").execSync("which ldd").toString().trim();
+      return readFileSync(lddPath, "utf8").includes("musl");
     } catch {
       return true;
     }
@@ -21,27 +21,27 @@ function isMusl() {
 }
 
 switch (platform) {
-  case 'darwin':
+  case "darwin":
     switch (arch) {
-      case 'x64':
-        localFileExisted = existsSync(join(__dirname, 'rust-fuzzy.darwin-x64.node'));
+      case "x64":
+        localFileExisted = existsSync(join(__dirname, "rust-fuzzy.darwin-x64.node"));
         try {
           if (localFileExisted) {
-            nativeBinding = require('./rust-fuzzy.darwin-x64.node');
+            nativeBinding = require("./rust-fuzzy.darwin-x64.node");
           } else {
-            nativeBinding = require('rust-fuzzy-darwin-x64');
+            nativeBinding = require("rust-fuzzy-darwin-x64");
           }
         } catch (e) {
           loadError = e;
         }
         break;
-      case 'arm64':
-        localFileExisted = existsSync(join(__dirname, 'rust-fuzzy.darwin-arm64.node'));
+      case "arm64":
+        localFileExisted = existsSync(join(__dirname, "rust-fuzzy.darwin-arm64.node"));
         try {
           if (localFileExisted) {
-            nativeBinding = require('./rust-fuzzy.darwin-arm64.node');
+            nativeBinding = require("./rust-fuzzy.darwin-arm64.node");
           } else {
-            nativeBinding = require('rust-fuzzy-darwin-arm64');
+            nativeBinding = require("rust-fuzzy-darwin-arm64");
           }
         } catch (e) {
           loadError = e;
@@ -51,52 +51,52 @@ switch (platform) {
         throw new Error(`Unsupported architecture on macOS: ${arch}`);
     }
     break;
-  case 'linux':
+  case "linux":
     switch (arch) {
-      case 'x64':
+      case "x64":
         if (isMusl()) {
-          localFileExisted = existsSync(join(__dirname, 'rust-fuzzy.linux-x64-musl.node'));
+          localFileExisted = existsSync(join(__dirname, "rust-fuzzy.linux-x64-musl.node"));
           try {
             if (localFileExisted) {
-              nativeBinding = require('./rust-fuzzy.linux-x64-musl.node');
+              nativeBinding = require("./rust-fuzzy.linux-x64-musl.node");
             } else {
-              nativeBinding = require('rust-fuzzy-linux-x64-musl');
+              nativeBinding = require("rust-fuzzy-linux-x64-musl");
             }
           } catch (e) {
             loadError = e;
           }
         } else {
-          localFileExisted = existsSync(join(__dirname, 'rust-fuzzy.linux-x64-gnu.node'));
+          localFileExisted = existsSync(join(__dirname, "rust-fuzzy.linux-x64-gnu.node"));
           try {
             if (localFileExisted) {
-              nativeBinding = require('./rust-fuzzy.linux-x64-gnu.node');
+              nativeBinding = require("./rust-fuzzy.linux-x64-gnu.node");
             } else {
-              nativeBinding = require('rust-fuzzy-linux-x64-gnu');
+              nativeBinding = require("rust-fuzzy-linux-x64-gnu");
             }
           } catch (e) {
             loadError = e;
           }
         }
         break;
-      case 'arm64':
+      case "arm64":
         if (isMusl()) {
-          localFileExisted = existsSync(join(__dirname, 'rust-fuzzy.linux-arm64-musl.node'));
+          localFileExisted = existsSync(join(__dirname, "rust-fuzzy.linux-arm64-musl.node"));
           try {
             if (localFileExisted) {
-              nativeBinding = require('./rust-fuzzy.linux-arm64-musl.node');
+              nativeBinding = require("./rust-fuzzy.linux-arm64-musl.node");
             } else {
-              nativeBinding = require('rust-fuzzy-linux-arm64-musl');
+              nativeBinding = require("rust-fuzzy-linux-arm64-musl");
             }
           } catch (e) {
             loadError = e;
           }
         } else {
-          localFileExisted = existsSync(join(__dirname, 'rust-fuzzy.linux-arm64-gnu.node'));
+          localFileExisted = existsSync(join(__dirname, "rust-fuzzy.linux-arm64-gnu.node"));
           try {
             if (localFileExisted) {
-              nativeBinding = require('./rust-fuzzy.linux-arm64-gnu.node');
+              nativeBinding = require("./rust-fuzzy.linux-arm64-gnu.node");
             } else {
-              nativeBinding = require('rust-fuzzy-linux-arm64-gnu');
+              nativeBinding = require("rust-fuzzy-linux-arm64-gnu");
             }
           } catch (e) {
             loadError = e;
@@ -115,7 +115,7 @@ if (!nativeBinding) {
   if (loadError) {
     throw loadError;
   }
-  throw new Error('Failed to load native binding');
+  throw new Error("Failed to load native binding");
 }
 
 const { fuzzySearch, fuzzySearchDocument, DocumentSource } = nativeBinding;
