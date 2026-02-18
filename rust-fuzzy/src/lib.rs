@@ -1,6 +1,4 @@
 use napi_derive::napi;
-use nucleo_matcher::{Matcher, Config, Utf32String};
-use nucleo_matcher::pattern::{Pattern, CaseMatching, Normalization};
 
 /// Word structure for selection bounds calculation
 #[derive(Debug)]
@@ -103,6 +101,32 @@ fn calculate_selection_bounds(
     }
 }
 
+/// Plain text substring search (char-level)
+/// Smart case: case-insensitive unless query contains uppercase
+/// Returns the char index of the first match, or None
+fn find_plain(line_chars: &[char], pattern_chars: &[char], case_insensitive: bool) -> Option<usize> {
+    let plen = pattern_chars.len();
+
+    if plen == 0 || plen > line_chars.len() {
+        return None;
+    }
+
+    'outer: for i in 0..=(line_chars.len() - plen) {
+        for j in 0..plen {
+            let lc = if case_insensitive {
+                line_chars[i + j].to_ascii_lowercase()
+            } else {
+                line_chars[i + j]
+            };
+            if lc != pattern_chars[j] {
+                continue 'outer;
+            }
+        }
+        return Some(i);
+    }
+    None
+}
+
 #[napi(object)]
 pub struct FuzzyMatch {
     pub line_index: u32,
@@ -110,10 +134,10 @@ pub struct FuzzyMatch {
     pub score: i32,
     pub match_start: u32,
     pub match_end: u32,
-    pub match_indices: Vec<u32>,  // Individual character positions that matched
-    pub selection_start: u32,     // Start of selection (Cas A or B)
-    pub selection_end: u32,       // End of selection (Cas A or B)
-    pub highlights: Vec<Vec<u32>>, // Highlight ranges [start, end]
+    pub match_indices: Vec<u32>,
+    pub selection_start: u32,
+    pub selection_end: u32,
+    pub highlights: Vec<Vec<u32>>,
 }
 
 /// Document source: either text content or file path
@@ -125,8 +149,8 @@ pub struct DocumentSource {
     pub path: Option<String>,
 }
 
-/// Fuzzy search from document source (hybrid: text or file path)
-/// Returns matches sorted by score (best first)
+/// Plain text search from document source (hybrid: text or file path)
+/// Returns matches in line order (first occurrence per line)
 #[napi]
 pub fn fuzzy_search_document(source: DocumentSource, pattern: String, limit: Option<u32>) -> Vec<FuzzyMatch> {
     use std::fs;
@@ -136,12 +160,9 @@ pub fn fuzzy_search_document(source: DocumentSource, pattern: String, limit: Opt
         return vec![];
     }
 
-    // Read document: either from text or file path
     let lines: Vec<String> = if let Some(text) = source.text {
-        // Text provided: split into lines
         text.lines().map(|s| s.to_string()).collect()
     } else if let Some(path) = source.path {
-        // Path provided: read file directly
         match fs::File::open(&path) {
             Ok(file) => {
                 io::BufReader::new(file)
@@ -159,211 +180,220 @@ pub fn fuzzy_search_document(source: DocumentSource, pattern: String, limit: Opt
         return vec![];
     };
 
-    // Call existing fuzzy_search logic
-    fuzzy_search_internal(lines, pattern, limit)
+    plain_search_internal(lines, pattern, limit)
 }
 
-/// Legacy function for backward compatibility (deprecated)
-/// Use fuzzy_search_document instead
+/// Legacy function for backward compatibility
 #[napi]
 pub fn fuzzy_search(lines: Vec<String>, pattern: String, limit: Option<u32>) -> Vec<FuzzyMatch> {
-    fuzzy_search_internal(lines, pattern, limit)
+    plain_search_internal(lines, pattern, limit)
 }
 
-/// Internal fuzzy search implementation
-fn fuzzy_search_internal(lines: Vec<String>, pattern: String, limit: Option<u32>) -> Vec<FuzzyMatch> {
+/// Internal plain text search implementation
+/// Smart case: case-insensitive unless query contains uppercase
+fn plain_search_internal(lines: Vec<String>, pattern: String, limit: Option<u32>) -> Vec<FuzzyMatch> {
     if pattern.is_empty() {
         return vec![];
     }
 
     let limit = limit.unwrap_or(100) as usize;
 
-    let nucleo_pattern = Pattern::parse(
-        &pattern,
-        CaseMatching::Ignore,   // Case-insensitive matching
-        Normalization::Never,   // No Unicode normalization
-    );
+    // Smart case: case-insensitive unless query contains uppercase
+    let case_insensitive = !pattern.chars().any(|c| c.is_uppercase());
 
-    // Calculate scores and filter out non-matching lines
-    // Note: Parallelization with Rayon was tested but Pattern cannot be shared between threads
-    // Each thread would need to recreate the pattern, which is slower than sequential processing
+    let pattern_chars: Vec<char> = if case_insensitive {
+        pattern.chars().map(|c| c.to_ascii_lowercase()).collect()
+    } else {
+        pattern.chars().collect()
+    };
+    let pattern_len = pattern_chars.len();
 
-    // Use sequential iteration (fastest for Nucleo pattern matching)
-    let mut matcher = Matcher::new(Config::DEFAULT);
-    // Pre-allocate for ~1% match rate (conservative estimate)
-    let mut results: Vec<(usize, u32, Vec<u32>)> = Vec::with_capacity(lines.len() / 100);
+    let mut results: Vec<FuzzyMatch> = Vec::with_capacity(limit.min(lines.len() / 10));
 
     for (idx, line) in lines.iter().enumerate() {
-        let line_utf32 = Utf32String::from(line.as_str());
-        let mut indices = Vec::new();
-        let score = nucleo_pattern.indices(line_utf32.slice(..), &mut matcher, &mut indices);
+        if results.len() >= limit {
+            break;
+        }
 
-        // Only keep if Nucleo found a match (score > 0)
-        if let Some(score_value) = score {
-            results.push((idx, score_value, indices));
+        let line_chars: Vec<char> = line.chars().collect();
+
+        if let Some(char_pos) = find_plain(&line_chars, &pattern_chars, case_insensitive) {
+            let match_start = char_pos as u32;
+            let match_end = (char_pos + pattern_len) as u32;
+
+            // Contiguous match indices
+            let match_indices: Vec<u32> = (match_start..match_end).collect();
+
+            let (sel_start, sel_end) = calculate_selection_bounds(line, &match_indices);
+
+            results.push(FuzzyMatch {
+                line_index: idx as u32,
+                line_content: line.clone(),
+                score: 0,
+                match_start,
+                match_end,
+                match_indices: match_indices.clone(),
+                selection_start: sel_start as u32,
+                selection_end: sel_end as u32,
+                highlights: calculate_highlights(&match_indices),
+            });
         }
     }
 
-    // Sort by score (descending) - best matches first
-    results.sort_by(|a, b| b.1.cmp(&a.1));
-
-    // Take top matches and convert to FuzzyMatch
-    let output = results
-        .into_iter()
-        .take(limit)
-        .map(|(idx, score, indices)| {
-            // Calculate match start/end from indices
-            let (start, end) = if !indices.is_empty() {
-                let first = *indices.first().unwrap() as usize;
-                let last = *indices.last().unwrap() as usize + 1;
-                (first as u32, last as u32)
-            } else {
-                (0, 0)
-            };
-
-            // Calculate selection bounds using the helper function
-            let (sel_start, sel_end) = calculate_selection_bounds(&lines[idx], &indices);
-
-            FuzzyMatch {
-                line_index: idx as u32,
-                line_content: lines[idx].clone(),
-                score: score as i32,
-                match_start: start,
-                match_end: end,
-                match_indices: indices.clone(),
-                selection_start: sel_start as u32,
-                selection_end: sel_end as u32,
-                highlights: calculate_highlights(&indices),
-            }
-        })
-        .collect();
-
-    output
+    results
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// Helper function to test fuzzy search with selection bounds
-    /// Reduces duplication across all test cases
-    fn assert_selection(
+    fn assert_match(
         test_name: &str,
         line: &str,
         query: &str,
         expected_start: u32,
         expected_end: u32,
-        expected_text: &str,
     ) {
         let results = fuzzy_search(vec![line.to_string()], query.to_string(), Some(5));
 
-        assert!(!results.is_empty(), "Should find match for '{}'", query);
+        assert!(!results.is_empty(), "[{}] Should find match for '{}'", test_name, query);
         let result = &results[0];
 
         println!("\n=== {} ===", test_name);
         println!("Query: '{}'", query);
         println!("Line: {}", result.line_content);
-        println!("Match indices: {:?}", result.match_indices);
-        println!("Selection: {}-{}", result.selection_start, result.selection_end);
-        println!("Selected text: '{}'", &line[result.selection_start as usize..result.selection_end as usize]);
+        println!("Match: {}-{}", result.match_start, result.match_end);
+        println!("Matched text: '{}'", &line[result.match_start as usize..result.match_end as usize]);
 
-        assert_eq!(result.selection_start, expected_start,
-                   "Selection start should be {}", expected_start);
-        assert_eq!(result.selection_end, expected_end,
-                   "Selection end should be {}", expected_end);
-        assert_eq!(&line[result.selection_start as usize..result.selection_end as usize],
-                   expected_text,
-                   "Should select '{}'", expected_text);
+        assert_eq!(result.match_start, expected_start,
+                   "[{}] match_start", test_name);
+        assert_eq!(result.match_end, expected_end,
+                   "[{}] match_end", test_name);
     }
 
-    #[test]
-    fn test_ondid_case() {
-        let line = "function onDidAccept() {";
-        let query = "ondid";
-
+    fn assert_no_match(test_name: &str, line: &str, query: &str) {
         let results = fuzzy_search(vec![line.to_string()], query.to_string(), Some(5));
-
-        println!("\n=== Testing 'ondid' → 'onDidAccept' ===");
-        if let Some(result) = results.first() {
-            println!("Line: {}", result.line_content);
-            println!("Match start: {}", result.match_start);
-            println!("Match end: {}", result.match_end);
-            println!("Match indices: {:?}", result.match_indices);
-            println!("Matched text: '{}'", &line[result.match_start as usize..result.match_end as usize]);
-        } else {
-            panic!("No results found for 'ondid'");
-        }
+        assert!(results.is_empty(), "[{}] Should NOT find match for '{}'", test_name, query);
     }
 
     #[test]
-    fn test_case_1_apply_cas_a() {
-        assert_selection(
-            "Test Case 1: 'apply' → Cas A (1 word)",
-            "export async function applySelectionFromItem(): boolean {",
+    fn test_plain_substring_match() {
+        assert_match(
+            "plain substring",
+            "function applySelectionFromItem() {",
             "apply",
-            22,
-            44,
-            "applySelectionFromItem",
+            9, 14,
         );
     }
 
     #[test]
-    fn test_case_3_expfnitem_cas_b() {
-        assert_selection(
-            "Test Case 3: 'expfnitem' → Cas B (3 words)",
+    fn test_case_insensitive_by_default() {
+        assert_match(
+            "case insensitive",
+            "function ApplySelection() {",
+            "apply",
+            9, 14,
+        );
+    }
+
+    #[test]
+    fn test_case_sensitive_when_uppercase_in_query() {
+        // Query has uppercase → case-sensitive
+        assert_match(
+            "case sensitive uppercase query",
+            "function ApplySelection() {",
+            "Apply",
+            9, 14,
+        );
+        assert_no_match(
+            "case sensitive no match",
+            "function applySelection() {",
+            "Apply",
+        );
+    }
+
+    #[test]
+    fn test_no_fuzzy_matching() {
+        // "afrm" should NOT match "applySelectionFromItem" (non-contiguous chars)
+        assert_no_match(
+            "no fuzzy: scattered chars across word",
+            "function applySelectionFromItem() {",
+            "afrm",
+        );
+    }
+
+    #[test]
+    fn test_no_fuzzy_scattered_chars() {
+        // "expfnitem" should NOT match (scattered chars)
+        assert_no_match(
+            "no fuzzy: scattered chars",
             "export async function applySelectionFromItem(): boolean {",
             "expfnitem",
-            0,
-            44,
-            "export async function applySelectionFromItem",
         );
     }
 
     #[test]
-    fn test_case_4_afrom_cas_a() {
-        assert_selection(
-            "Test Case 4: 'afrom' → Cas A (1 word, distant chars)",
-            "export async function applySelectionFromItem(): boolean {",
-            "afrom",
-            22,
-            44,
-            "applySelectionFromItem",
-        );
+    fn test_contiguous_match_in_identifier() {
+        // "ondid" won't match "onDidAccept" but "onDid" (case-insensitive) would
+        // since "ondid" lowered matches "ondid" in "onDidAccept" lowered → "ondidaccept"
+        // Wait: "onDidAccept" lowered = "ondidaccept", and "ondid" is a substring of that!
+        // So this SHOULD match case-insensitively.
+        let line = "function onDidAccept() {";
+        let results = fuzzy_search(vec![line.to_string()], "ondid".to_string(), Some(5));
+        assert!(!results.is_empty(), "ondid should match onDidAccept case-insensitively");
+        let r = &results[0];
+        assert_eq!(r.match_start, 9); // "onDid" starts at char 9
+        assert_eq!(r.match_end, 14);  // 5 chars
     }
 
     #[test]
-    fn test_case_5_asyncbool_cas_b() {
-        assert_selection(
-            "Test Case 5: 'asyncbool' → Cas B (2 blocks)",
-            "export async function applySelectionFromItem(): boolean {",
-            "asyncbool",
-            7,
-            55,
-            "async function applySelectionFromItem(): boolean",
-        );
+    fn test_selection_bounds_single_word() {
+        let line = "export async function applySelectionFromItem(): boolean {";
+        let results = fuzzy_search(vec![line.to_string()], "apply".to_string(), Some(5));
+        assert!(!results.is_empty());
+        let r = &results[0];
+        // Match is inside "applySelectionFromItem" → Cas A: select entire word
+        assert_eq!(r.selection_start, 22);
+        assert_eq!(r.selection_end, 44);
     }
 
     #[test]
-    fn test_case_6_msv_cas_a() {
-        assert_selection(
-            "Test Case 6: 'msv' → Cas A (identifier with underscores)",
-            "const my_super_variable = 42;",
-            "msv",
-            6,
-            23,
-            "my_super_variable",
-        );
+    fn test_highlights_contiguous() {
+        let line = "const foo = bar";
+        let results = fuzzy_search(vec![line.to_string()], "foo".to_string(), Some(5));
+        assert!(!results.is_empty());
+        let r = &results[0];
+        // Highlights should be a single contiguous range
+        assert_eq!(r.highlights.len(), 1);
+        assert_eq!(r.highlights[0], vec![6, 9]);
     }
 
     #[test]
-    fn test_case_7_tdfix_cas_b() {
-        assert_selection(
-            "Test Case 7: 'tdfix' → Cas B (2 words in comment)",
-            "// TODO: fix this issue now",
-            "tdfix",
-            3,
-            12,
-            "TODO: fix",
-        );
+    fn test_line_order() {
+        let lines = vec![
+            "third line has foo here".to_string(),
+            "first line".to_string(),
+            "second line with foo".to_string(),
+            "fourth foo line".to_string(),
+        ];
+        let results = fuzzy_search(lines, "foo".to_string(), Some(10));
+        assert_eq!(results.len(), 3);
+        // Results should be in line order
+        assert_eq!(results[0].line_index, 0);
+        assert_eq!(results[1].line_index, 2);
+        assert_eq!(results[2].line_index, 3);
+    }
+
+    #[test]
+    fn test_empty_pattern() {
+        let results = fuzzy_search(vec!["hello".to_string()], "".to_string(), Some(5));
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_limit() {
+        let lines: Vec<String> = (0..200).map(|i| format!("line {} with foo", i)).collect();
+        let results = fuzzy_search(lines, "foo".to_string(), Some(50));
+        assert_eq!(results.len(), 50);
     }
 }

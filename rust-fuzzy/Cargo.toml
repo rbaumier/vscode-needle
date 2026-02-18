@@ -9,7 +9,6 @@ crate-type = ["cdylib"]
 [dependencies]
 napi = { version = "2", default-features = false, features = ["napi4", "tokio_rt"] }
 napi-derive = "2"
-nucleo-matcher = "0.3"
 
 [build-dependencies]
 napi-build = "2"
