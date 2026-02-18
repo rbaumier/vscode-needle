@@ -13,51 +13,49 @@ type QuickPickLineItem = QuickPickItem & {
   selection: Selection;
 };
 
-// Maximum number of matches to return from fuzzy search
 const LIMIT_MATCHES = 100;
+const ELLIPSIS = "... ";
+const MAX_VISIBLE_BEFORE_MATCH = 60;
+const CONTEXT_BEFORE_MATCH = 20;
 
-/**
- * Converts fuzzy match results from Rust into VSCode QuickPick items
- * with proper highlighting and selection information
- *
- * @param matches - Array of fuzzy matches from the Rust search engine
- * @returns Array of QuickPick items ready to display in VSCode UI
- */
 function fuzzyMatchesToQuickPickItems(matches: FuzzyMatch[]): QuickPickLineItem[] {
   return matches.map((match, i) => {
-    // Get the zero-indexed line number from the match
     const lineNumber = match.lineIndex;
-    // Convert to 1-indexed for display (users expect lines to start at 1)
     const lineNumberStr = String(lineNumber + 1);
-    // Get the text content of the matched line
-    const lineContent = match.lineContent;
+    const originalContent = match.lineContent;
 
-    // Calculate highlight positions in the label
-    // Label format: "lineNumber: content"
+    // Strip leading indentation
+    const trimmedContent = originalContent.trimStart();
+    const indentStripped = originalContent.length - trimmedContent.length;
+
+    // Check if match is too far in the trimmed line → prepend "..."
+    const matchStartInTrimmed = (match.highlights.at(0)?.at(0) ?? 0) - indentStripped;
+
+    let displayContent = trimmedContent;
+    let contentOffset = indentStripped;
+    let ellipsisPrefix = "";
+
+    if (matchStartInTrimmed > MAX_VISIBLE_BEFORE_MATCH) {
+      const trimStart = matchStartInTrimmed - CONTEXT_BEFORE_MATCH;
+      displayContent = trimmedContent.substring(trimStart);
+      contentOffset = indentStripped + trimStart;
+      ellipsisPrefix = ELLIPSIS;
+    }
+
     const lineNumberPrefix = `${lineNumberStr}: `;
-    const prefixLength = lineNumberPrefix.length;
+    const totalPrefixLength = lineNumberPrefix.length + ellipsisPrefix.length;
 
-    // Use highlights from Rust (already calculated and grouped into ranges)
-    // Adjust the highlight positions by adding the prefix length offset
-    // since the Rust engine doesn't account for the "lineNumber: " prefix
     const highlights: [number, number][] = match.highlights.map((h) => [
-      prefixLength + h[0],
-      prefixLength + h[1],
+      totalPrefixLength + h[0] - contentOffset,
+      totalPrefixLength + h[1] - contentOffset,
     ]);
 
     return {
-      // Display format: "123: matched line content"
-      label: `${lineNumberStr}: ${lineContent}`,
+      label: `${lineNumberStr}: ${ellipsisPrefix}${displayContent}`,
       description: "",
-      // Pre-select the first match for better UX
       picked: i === 0,
-      // Force Always show this item, otherwise VSCode will filter it out
-      // if the pattern doesn't match it
       alwaysShow: true,
-      // Highlight ranges for matched characters
       highlights,
-      // Selection range to apply when user picks this item
-      // This determines what text gets selected in the editor
       selection: new Selection(
         new Position(lineNumber, match.selectionStart),
         new Position(lineNumber, match.selectionEnd)
