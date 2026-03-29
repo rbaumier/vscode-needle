@@ -21,8 +21,7 @@ fn calculate_highlights(indices: &[u32]) -> Vec<Vec<u32>> {
     let mut range_start = indices[0];
     let mut range_end = indices[0] + 1;
 
-    for i in 1..indices.len() {
-        let current_idx = indices[i];
+    for &current_idx in &indices[1..] {
         if current_idx == range_end {
             range_end = current_idx + 1;
         } else {
@@ -38,10 +37,7 @@ fn calculate_highlights(indices: &[u32]) -> Vec<Vec<u32>> {
 
 /// Calculate selection bounds (single word or span of words).
 /// All indices are char-based (not byte offsets) for Unicode correctness.
-fn calculate_selection_bounds(
-    line_chars: &[char],
-    match_indices: &[u32],
-) -> (usize, usize) {
+fn calculate_selection_bounds(line_chars: &[char], match_indices: &[u32]) -> (usize, usize) {
     let mut words: Vec<Word> = Vec::new();
     let mut current_word_start = None;
 
@@ -94,7 +90,11 @@ fn calculate_selection_bounds(
 
 /// Plain text substring search (char-level).
 /// Smart case: case-insensitive unless query contains uppercase.
-fn find_plain(line_chars: &[char], pattern_chars: &[char], case_insensitive: bool) -> Option<usize> {
+fn find_plain(
+    line_chars: &[char],
+    pattern_chars: &[char],
+    case_insensitive: bool,
+) -> Option<usize> {
     let plen = pattern_chars.len();
 
     if plen == 0 || plen > line_chars.len() {
@@ -104,7 +104,10 @@ fn find_plain(line_chars: &[char], pattern_chars: &[char], case_insensitive: boo
     'outer: for i in 0..=(line_chars.len() - plen) {
         for j in 0..plen {
             let lc = if case_insensitive {
-                line_chars[i + j].to_lowercase().next().unwrap_or(line_chars[i + j])
+                line_chars[i + j]
+                    .to_lowercase()
+                    .next()
+                    .unwrap_or(line_chars[i + j])
             } else {
                 line_chars[i + j]
             };
@@ -139,7 +142,11 @@ pub struct DocumentSource {
 /// Search document by text content or file path.
 /// Returns matches in line order (first occurrence per line).
 #[napi]
-pub fn search_document(source: DocumentSource, pattern: String, limit: Option<u32>) -> Vec<SearchMatch> {
+pub fn search_document(
+    source: DocumentSource,
+    pattern: String,
+    limit: Option<u32>,
+) -> Vec<SearchMatch> {
     if pattern.is_empty() {
         return vec![];
     }
@@ -148,12 +155,10 @@ pub fn search_document(source: DocumentSource, pattern: String, limit: Option<u3
         text.lines().map(|s| s.to_string()).collect()
     } else if let Some(path) = source.path {
         match fs::File::open(&path) {
-            Ok(file) => {
-                io::BufReader::new(file)
-                    .lines()
-                    .filter_map(|line| line.ok())
-                    .collect()
-            }
+            Ok(file) => io::BufReader::new(file)
+                .lines()
+                .map_while(Result::ok)
+                .collect(),
             Err(_) => {
                 return vec![];
             }
@@ -183,7 +188,10 @@ fn search_internal(lines: &[String], pattern: String, limit: Option<u32>) -> Vec
     let case_insensitive = !pattern.chars().any(|c| c.is_uppercase());
 
     let pattern_chars: Vec<char> = if case_insensitive {
-        pattern.chars().map(|c| c.to_lowercase().next().unwrap_or(c)).collect()
+        pattern
+            .chars()
+            .map(|c| c.to_lowercase().next().unwrap_or(c))
+            .collect()
     } else {
         pattern.chars().collect()
     };
@@ -236,55 +244,110 @@ mod tests {
     ) {
         let results = search(vec![line.to_string()], query.to_string(), Some(5));
 
-        assert!(!results.is_empty(), "[{}] Should find match for '{}'", test_name, query);
+        assert!(
+            !results.is_empty(),
+            "[{}] Should find match for '{}'",
+            test_name,
+            query
+        );
         let result = &results[0];
 
-        assert_eq!(result.match_start, expected_start, "[{}] match_start", test_name);
+        assert_eq!(
+            result.match_start, expected_start,
+            "[{}] match_start",
+            test_name
+        );
         assert_eq!(result.match_end, expected_end, "[{}] match_end", test_name);
     }
 
     fn assert_no_match(test_name: &str, line: &str, query: &str) {
         let results = search(vec![line.to_string()], query.to_string(), Some(5));
-        assert!(results.is_empty(), "[{}] Should NOT find match for '{}'", test_name, query);
+        assert!(
+            results.is_empty(),
+            "[{}] Should NOT find match for '{}'",
+            test_name,
+            query
+        );
     }
 
     #[test]
     fn test_plain_substring_match() {
-        assert_match("plain substring", "function applySelectionFromItem() {", "apply", 9, 14);
+        assert_match(
+            "plain substring",
+            "function applySelectionFromItem() {",
+            "apply",
+            9,
+            14,
+        );
     }
 
     #[test]
     fn test_case_insensitive_by_default() {
-        assert_match("case insensitive", "function ApplySelection() {", "apply", 9, 14);
+        assert_match(
+            "case insensitive",
+            "function ApplySelection() {",
+            "apply",
+            9,
+            14,
+        );
     }
 
     #[test]
     fn test_case_sensitive_when_uppercase_in_query() {
-        assert_match("case sensitive uppercase query", "function ApplySelection() {", "Apply", 9, 14);
-        assert_no_match("case sensitive no match", "function applySelection() {", "Apply");
+        assert_match(
+            "case sensitive uppercase query",
+            "function ApplySelection() {",
+            "Apply",
+            9,
+            14,
+        );
+        assert_no_match(
+            "case sensitive no match",
+            "function applySelection() {",
+            "Apply",
+        );
     }
 
     #[test]
     fn test_non_contiguous_chars_do_not_match() {
-        assert_no_match("scattered chars across word", "function applySelectionFromItem() {", "afrm");
+        assert_no_match(
+            "scattered chars across word",
+            "function applySelectionFromItem() {",
+            "afrm",
+        );
     }
 
     #[test]
     fn test_scattered_chars_do_not_match() {
-        assert_no_match("scattered chars", "export async function applySelectionFromItem(): boolean {", "expfnitem");
+        assert_no_match(
+            "scattered chars",
+            "export async function applySelectionFromItem(): boolean {",
+            "expfnitem",
+        );
     }
 
     #[test]
     fn test_contiguous_match_in_identifier() {
-        let results = search(vec!["function onDidAccept() {".to_string()], "ondid".to_string(), Some(5));
-        assert!(!results.is_empty(), "ondid should match onDidAccept case-insensitively");
+        let results = search(
+            vec!["function onDidAccept() {".to_string()],
+            "ondid".to_string(),
+            Some(5),
+        );
+        assert!(
+            !results.is_empty(),
+            "ondid should match onDidAccept case-insensitively"
+        );
         assert_eq!(results[0].match_start, 9);
         assert_eq!(results[0].match_end, 14);
     }
 
     #[test]
     fn test_selection_bounds_single_word() {
-        let results = search(vec!["export async function applySelectionFromItem(): boolean {".to_string()], "apply".to_string(), Some(5));
+        let results = search(
+            vec!["export async function applySelectionFromItem(): boolean {".to_string()],
+            "apply".to_string(),
+            Some(5),
+        );
         assert!(!results.is_empty());
         assert_eq!(results[0].selection_start, 22);
         assert_eq!(results[0].selection_end, 44);
@@ -292,7 +355,11 @@ mod tests {
 
     #[test]
     fn test_highlights_contiguous() {
-        let results = search(vec!["const foo = bar".to_string()], "foo".to_string(), Some(5));
+        let results = search(
+            vec!["const foo = bar".to_string()],
+            "foo".to_string(),
+            Some(5),
+        );
         assert!(!results.is_empty());
         assert_eq!(results[0].highlights.len(), 1);
         assert_eq!(results[0].highlights[0], vec![6, 9]);
