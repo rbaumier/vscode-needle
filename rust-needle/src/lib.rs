@@ -1,3 +1,7 @@
+use std::collections::HashSet;
+use std::fs;
+use std::io::{self, BufRead};
+
 use napi_derive::napi;
 
 /// Word structure for selection bounds calculation
@@ -32,27 +36,23 @@ fn calculate_highlights(indices: &[u32]) -> Vec<Vec<u32>> {
     highlights
 }
 
-/// Calculate selection bounds (single word or span of words)
+/// Calculate selection bounds (single word or span of words).
+/// All indices are char-based (not byte offsets) for Unicode correctness.
 fn calculate_selection_bounds(
-    line: &str,
+    line_chars: &[char],
     match_indices: &[u32],
 ) -> (usize, usize) {
-    use std::collections::HashSet;
-
     let mut words: Vec<Word> = Vec::new();
     let mut current_word_start = None;
 
-    for (i, ch) in line.char_indices() {
+    for (i, &ch) in line_chars.iter().enumerate() {
         let is_word_char = ch.is_alphanumeric() || ch == '_';
 
         if is_word_char && current_word_start.is_none() {
             current_word_start = Some(i);
         } else if !is_word_char && current_word_start.is_some() {
             let start = current_word_start.unwrap();
-            words.push(Word {
-                start,
-                end: i,
-            });
+            words.push(Word { start, end: i });
             current_word_start = None;
         }
     }
@@ -60,7 +60,7 @@ fn calculate_selection_bounds(
     if let Some(start) = current_word_start {
         words.push(Word {
             start,
-            end: line.len(),
+            end: line_chars.len(),
         });
     }
 
@@ -104,7 +104,7 @@ fn find_plain(line_chars: &[char], pattern_chars: &[char], case_insensitive: boo
     'outer: for i in 0..=(line_chars.len() - plen) {
         for j in 0..plen {
             let lc = if case_insensitive {
-                line_chars[i + j].to_ascii_lowercase()
+                line_chars[i + j].to_lowercase().next().unwrap_or(line_chars[i + j])
             } else {
                 line_chars[i + j]
             };
@@ -121,7 +121,6 @@ fn find_plain(line_chars: &[char], pattern_chars: &[char], case_insensitive: boo
 pub struct SearchMatch {
     pub line_index: u32,
     pub line_content: String,
-    pub score: i32,
     pub match_start: u32,
     pub match_end: u32,
     pub match_indices: Vec<u32>,
@@ -141,9 +140,6 @@ pub struct DocumentSource {
 /// Returns matches in line order (first occurrence per line).
 #[napi]
 pub fn search_document(source: DocumentSource, pattern: String, limit: Option<u32>) -> Vec<SearchMatch> {
-    use std::fs;
-    use std::io::{self, BufRead};
-
     if pattern.is_empty() {
         return vec![];
     }
@@ -158,28 +154,26 @@ pub fn search_document(source: DocumentSource, pattern: String, limit: Option<u3
                     .filter_map(|line| line.ok())
                     .collect()
             }
-            Err(_e) => {
-                eprintln!("[RUST ERROR] Failed to read file '{}': {}", path, _e);
+            Err(_) => {
                 return vec![];
             }
         }
     } else {
-        eprintln!("[RUST ERROR] DocumentSource must have either text or path");
         return vec![];
     };
 
-    search_internal(lines, pattern, limit)
+    search_internal(&lines, pattern, limit)
 }
 
 /// Search lines for a pattern. Exported for testing and direct use.
 #[napi]
 pub fn search(lines: Vec<String>, pattern: String, limit: Option<u32>) -> Vec<SearchMatch> {
-    search_internal(lines, pattern, limit)
+    search_internal(&lines, pattern, limit)
 }
 
 /// Internal plain text search implementation.
 /// Smart case: case-insensitive unless query contains uppercase.
-fn search_internal(lines: Vec<String>, pattern: String, limit: Option<u32>) -> Vec<SearchMatch> {
+fn search_internal(lines: &[String], pattern: String, limit: Option<u32>) -> Vec<SearchMatch> {
     if pattern.is_empty() {
         return vec![];
     }
@@ -189,7 +183,7 @@ fn search_internal(lines: Vec<String>, pattern: String, limit: Option<u32>) -> V
     let case_insensitive = !pattern.chars().any(|c| c.is_uppercase());
 
     let pattern_chars: Vec<char> = if case_insensitive {
-        pattern.chars().map(|c| c.to_ascii_lowercase()).collect()
+        pattern.chars().map(|c| c.to_lowercase().next().unwrap_or(c)).collect()
     } else {
         pattern.chars().collect()
     };
@@ -210,18 +204,18 @@ fn search_internal(lines: Vec<String>, pattern: String, limit: Option<u32>) -> V
 
             let match_indices: Vec<u32> = (match_start..match_end).collect();
 
-            let (sel_start, sel_end) = calculate_selection_bounds(line, &match_indices);
+            let (sel_start, sel_end) = calculate_selection_bounds(&line_chars, &match_indices);
+            let highlights = calculate_highlights(&match_indices);
 
             results.push(SearchMatch {
                 line_index: idx as u32,
                 line_content: line.clone(),
-                score: 0,
                 match_start,
                 match_end,
-                match_indices: match_indices.clone(),
+                match_indices,
                 selection_start: sel_start as u32,
                 selection_end: sel_end as u32,
-                highlights: calculate_highlights(&match_indices),
+                highlights,
             });
         }
     }
@@ -245,16 +239,8 @@ mod tests {
         assert!(!results.is_empty(), "[{}] Should find match for '{}'", test_name, query);
         let result = &results[0];
 
-        println!("\n=== {} ===", test_name);
-        println!("Query: '{}'", query);
-        println!("Line: {}", result.line_content);
-        println!("Match: {}-{}", result.match_start, result.match_end);
-        println!("Matched text: '{}'", &line[result.match_start as usize..result.match_end as usize]);
-
-        assert_eq!(result.match_start, expected_start,
-                   "[{}] match_start", test_name);
-        assert_eq!(result.match_end, expected_end,
-                   "[{}] match_end", test_name);
+        assert_eq!(result.match_start, expected_start, "[{}] match_start", test_name);
+        assert_eq!(result.match_end, expected_end, "[{}] match_end", test_name);
     }
 
     fn assert_no_match(test_name: &str, line: &str, query: &str) {
@@ -264,85 +250,52 @@ mod tests {
 
     #[test]
     fn test_plain_substring_match() {
-        assert_match(
-            "plain substring",
-            "function applySelectionFromItem() {",
-            "apply",
-            9, 14,
-        );
+        assert_match("plain substring", "function applySelectionFromItem() {", "apply", 9, 14);
     }
 
     #[test]
     fn test_case_insensitive_by_default() {
-        assert_match(
-            "case insensitive",
-            "function ApplySelection() {",
-            "apply",
-            9, 14,
-        );
+        assert_match("case insensitive", "function ApplySelection() {", "apply", 9, 14);
     }
 
     #[test]
     fn test_case_sensitive_when_uppercase_in_query() {
-        assert_match(
-            "case sensitive uppercase query",
-            "function ApplySelection() {",
-            "Apply",
-            9, 14,
-        );
-        assert_no_match(
-            "case sensitive no match",
-            "function applySelection() {",
-            "Apply",
-        );
+        assert_match("case sensitive uppercase query", "function ApplySelection() {", "Apply", 9, 14);
+        assert_no_match("case sensitive no match", "function applySelection() {", "Apply");
     }
 
     #[test]
     fn test_non_contiguous_chars_do_not_match() {
-        assert_no_match(
-            "scattered chars across word",
-            "function applySelectionFromItem() {",
-            "afrm",
-        );
+        assert_no_match("scattered chars across word", "function applySelectionFromItem() {", "afrm");
     }
 
     #[test]
     fn test_scattered_chars_do_not_match() {
-        assert_no_match(
-            "scattered chars",
-            "export async function applySelectionFromItem(): boolean {",
-            "expfnitem",
-        );
+        assert_no_match("scattered chars", "export async function applySelectionFromItem(): boolean {", "expfnitem");
     }
 
     #[test]
     fn test_contiguous_match_in_identifier() {
-        let line = "function onDidAccept() {";
-        let results = search(vec![line.to_string()], "ondid".to_string(), Some(5));
+        let results = search(vec!["function onDidAccept() {".to_string()], "ondid".to_string(), Some(5));
         assert!(!results.is_empty(), "ondid should match onDidAccept case-insensitively");
-        let r = &results[0];
-        assert_eq!(r.match_start, 9);
-        assert_eq!(r.match_end, 14);
+        assert_eq!(results[0].match_start, 9);
+        assert_eq!(results[0].match_end, 14);
     }
 
     #[test]
     fn test_selection_bounds_single_word() {
-        let line = "export async function applySelectionFromItem(): boolean {";
-        let results = search(vec![line.to_string()], "apply".to_string(), Some(5));
+        let results = search(vec!["export async function applySelectionFromItem(): boolean {".to_string()], "apply".to_string(), Some(5));
         assert!(!results.is_empty());
-        let r = &results[0];
-        assert_eq!(r.selection_start, 22);
-        assert_eq!(r.selection_end, 44);
+        assert_eq!(results[0].selection_start, 22);
+        assert_eq!(results[0].selection_end, 44);
     }
 
     #[test]
     fn test_highlights_contiguous() {
-        let line = "const foo = bar";
-        let results = search(vec![line.to_string()], "foo".to_string(), Some(5));
+        let results = search(vec!["const foo = bar".to_string()], "foo".to_string(), Some(5));
         assert!(!results.is_empty());
-        let r = &results[0];
-        assert_eq!(r.highlights.len(), 1);
-        assert_eq!(r.highlights[0], vec![6, 9]);
+        assert_eq!(results[0].highlights.len(), 1);
+        assert_eq!(results[0].highlights[0], vec![6, 9]);
     }
 
     #[test]
@@ -371,5 +324,11 @@ mod tests {
         let lines: Vec<String> = (0..200).map(|i| format!("line {} with foo", i)).collect();
         let results = search(lines, "foo".to_string(), Some(50));
         assert_eq!(results.len(), 50);
+    }
+
+    #[test]
+    fn test_unicode_case_insensitive() {
+        assert_match("unicode lowercase", "let café = 42", "café", 4, 8);
+        assert_match("unicode case insensitive", "let Café = 42", "café", 4, 8);
     }
 }
