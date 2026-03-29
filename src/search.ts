@@ -102,7 +102,7 @@ function findInDocument(pattern: string): SearchMatch[] | null {
  * Main search entry point. Finds matches in the active document
  * and converts them to QuickPick items with highlighting.
  */
-export default function search(pattern: string): QuickPickLineItem[] {
+export function search(pattern: string): QuickPickLineItem[] {
   const matches = findInDocument(pattern);
   if (!matches) {
     return [];

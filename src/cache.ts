@@ -11,8 +11,8 @@ type CacheEntry = {
 class SearchCache {
   private readonly cache = new Map<string, CacheEntry>();
 
-  // biome-ignore lint/style/noMagicNumbers: cache expiration
-  private readonly maxAge = 5 * 60 * 1000;
+  private readonly MAX_AGE_MS = 5 * 60 * 1_000;
+  private readonly CLEANUP_INTERVAL = 10;
 
   private getCacheKey(filePath: string, pattern: string): string {
     return `${filePath}::${pattern}`;
@@ -32,7 +32,7 @@ class SearchCache {
     }
 
     const age = Date.now() - entry.timestamp;
-    if (age > this.maxAge) {
+    if (age > this.MAX_AGE_MS) {
       this.cache.delete(key);
       return null;
     }
@@ -50,7 +50,7 @@ class SearchCache {
       timestamp: Date.now(),
     });
 
-    if (this.cache.size % 10 === 0) {
+    if (this.cache.size % this.CLEANUP_INTERVAL === 0) {
       this.cleanOldEntries();
     }
   }
@@ -66,7 +66,7 @@ class SearchCache {
   private cleanOldEntries(): void {
     const now = Date.now();
     for (const [key, entry] of this.cache.entries()) {
-      if (now - entry.timestamp > this.maxAge) {
+      if (now - entry.timestamp > this.MAX_AGE_MS) {
         this.cache.delete(key);
       }
     }

@@ -1,4 +1,5 @@
 import {
+  type Disposable,
   commands,
   type ExtensionContext,
   type QuickPickItem,
@@ -8,7 +9,7 @@ import {
   workspace,
 } from "vscode";
 import { searchCache } from "./cache";
-import search from "./search";
+import { search } from "./search";
 
 const INPUT_PLACEHOLDER = "Please input your search pattern.";
 
@@ -74,45 +75,57 @@ export function activate(context: ExtensionContext): void {
     (quickPick as QuickPickInternal).sortByLabel = false;
     (quickPick as QuickPickInternal).filterProvider = () => null;
 
-    quickPick.onDidChangeValue((newPattern) => {
-      if (newPattern.length === 0) {
-        quickPick.items = [];
-        return;
-      }
+    const disposables: Disposable[] = [];
 
-      const newItems = search(newPattern);
-
-      quickPick.items = newItems;
-
-      if (newItems.length > 0) {
-        quickPick.activeItems = [quickPick.items[0]];
-
-        const firstItem = quickPick.items[0];
-        if (firstItem.selection) {
-          applySelectionFromItem(firstItem);
+    disposables.push(
+      quickPick.onDidChangeValue((newPattern) => {
+        if (newPattern.length === 0) {
+          quickPick.items = [];
+          return;
         }
-      }
-    });
 
-    quickPick.onDidChangeActive(([item]) => {
-      if (!item) {
-        return;
-      }
+        const newItems = search(newPattern);
 
-      applySelectionFromItem(item);
-    });
+        quickPick.items = newItems;
 
-    quickPick.onDidAccept(() => {
-      itemAccepted = true;
-      quickPick.hide();
-    });
+        if (newItems.length > 0) {
+          quickPick.activeItems = [quickPick.items[0]];
 
-    quickPick.onDidHide(() => {
-      if (!itemAccepted && originalSelection && editor) {
-        editor.selection = originalSelection;
-        editor.revealRange(originalSelection, TextEditorRevealType.InCenter);
-      }
-    });
+          const firstItem = quickPick.items[0];
+          if (firstItem.selection) {
+            applySelectionFromItem(firstItem);
+          }
+        }
+      })
+    );
+
+    disposables.push(
+      quickPick.onDidChangeActive(([item]) => {
+        if (!item) {
+          return;
+        }
+
+        applySelectionFromItem(item);
+      })
+    );
+
+    disposables.push(
+      quickPick.onDidAccept(() => {
+        itemAccepted = true;
+        quickPick.hide();
+      })
+    );
+
+    disposables.push(
+      quickPick.onDidHide(() => {
+        if (!itemAccepted && originalSelection && editor) {
+          editor.selection = originalSelection;
+          editor.revealRange(originalSelection, TextEditorRevealType.InCenter);
+        }
+        for (const d of disposables) d.dispose();
+        quickPick.dispose();
+      })
+    );
 
     quickPick.show();
   });
