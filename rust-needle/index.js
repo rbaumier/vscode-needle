@@ -24,24 +24,24 @@ switch (platform) {
   case "darwin":
     switch (arch) {
       case "x64":
-        localFileExisted = existsSync(join(__dirname, "rust-fuzzy.darwin-x64.node"));
+        localFileExisted = existsSync(join(__dirname, "rust-needle.darwin-x64.node"));
         try {
           if (localFileExisted) {
-            nativeBinding = require("./rust-fuzzy.darwin-x64.node");
+            nativeBinding = require("./rust-needle.darwin-x64.node");
           } else {
-            nativeBinding = require("rust-fuzzy-darwin-x64");
+            nativeBinding = require("rust-needle-darwin-x64");
           }
         } catch (e) {
           loadError = e;
         }
         break;
       case "arm64":
-        localFileExisted = existsSync(join(__dirname, "rust-fuzzy.darwin-arm64.node"));
+        localFileExisted = existsSync(join(__dirname, "rust-needle.darwin-arm64.node"));
         try {
           if (localFileExisted) {
-            nativeBinding = require("./rust-fuzzy.darwin-arm64.node");
+            nativeBinding = require("./rust-needle.darwin-arm64.node");
           } else {
-            nativeBinding = require("rust-fuzzy-darwin-arm64");
+            nativeBinding = require("rust-needle-darwin-arm64");
           }
         } catch (e) {
           loadError = e;
@@ -55,23 +55,23 @@ switch (platform) {
     switch (arch) {
       case "x64":
         if (isMusl()) {
-          localFileExisted = existsSync(join(__dirname, "rust-fuzzy.linux-x64-musl.node"));
+          localFileExisted = existsSync(join(__dirname, "rust-needle.linux-x64-musl.node"));
           try {
             if (localFileExisted) {
-              nativeBinding = require("./rust-fuzzy.linux-x64-musl.node");
+              nativeBinding = require("./rust-needle.linux-x64-musl.node");
             } else {
-              nativeBinding = require("rust-fuzzy-linux-x64-musl");
+              nativeBinding = require("rust-needle-linux-x64-musl");
             }
           } catch (e) {
             loadError = e;
           }
         } else {
-          localFileExisted = existsSync(join(__dirname, "rust-fuzzy.linux-x64-gnu.node"));
+          localFileExisted = existsSync(join(__dirname, "rust-needle.linux-x64-gnu.node"));
           try {
             if (localFileExisted) {
-              nativeBinding = require("./rust-fuzzy.linux-x64-gnu.node");
+              nativeBinding = require("./rust-needle.linux-x64-gnu.node");
             } else {
-              nativeBinding = require("rust-fuzzy-linux-x64-gnu");
+              nativeBinding = require("rust-needle-linux-x64-gnu");
             }
           } catch (e) {
             loadError = e;
@@ -80,23 +80,23 @@ switch (platform) {
         break;
       case "arm64":
         if (isMusl()) {
-          localFileExisted = existsSync(join(__dirname, "rust-fuzzy.linux-arm64-musl.node"));
+          localFileExisted = existsSync(join(__dirname, "rust-needle.linux-arm64-musl.node"));
           try {
             if (localFileExisted) {
-              nativeBinding = require("./rust-fuzzy.linux-arm64-musl.node");
+              nativeBinding = require("./rust-needle.linux-arm64-musl.node");
             } else {
-              nativeBinding = require("rust-fuzzy-linux-arm64-musl");
+              nativeBinding = require("rust-needle-linux-arm64-musl");
             }
           } catch (e) {
             loadError = e;
           }
         } else {
-          localFileExisted = existsSync(join(__dirname, "rust-fuzzy.linux-arm64-gnu.node"));
+          localFileExisted = existsSync(join(__dirname, "rust-needle.linux-arm64-gnu.node"));
           try {
             if (localFileExisted) {
-              nativeBinding = require("./rust-fuzzy.linux-arm64-gnu.node");
+              nativeBinding = require("./rust-needle.linux-arm64-gnu.node");
             } else {
-              nativeBinding = require("rust-fuzzy-linux-arm64-gnu");
+              nativeBinding = require("rust-needle-linux-arm64-gnu");
             }
           } catch (e) {
             loadError = e;
@@ -118,8 +118,8 @@ if (!nativeBinding) {
   throw new Error("Failed to load native binding");
 }
 
-const { fuzzySearch, fuzzySearchDocument, DocumentSource } = nativeBinding;
+const { search, searchDocument, DocumentSource } = nativeBinding;
 
-module.exports.fuzzySearch = fuzzySearch;
-module.exports.fuzzySearchDocument = fuzzySearchDocument;
+module.exports.search = search;
+module.exports.searchDocument = searchDocument;
 module.exports.DocumentSource = DocumentSource;

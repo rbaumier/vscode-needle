@@ -1,0 +1,77 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#1a1a2e"/>
+      <stop offset="100%" style="stop-color:#16213e"/>
+    </linearGradient>
+    <linearGradient id="needle" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#e2e8f0"/>
+      <stop offset="100%" style="stop-color:#94a3b8"/>
+    </linearGradient>
+    <linearGradient id="thread" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#6366f1"/>
+      <stop offset="100%" style="stop-color:#8b5cf6"/>
+    </linearGradient>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="4" result="coloredBlur"/>
+      <feMerge>
+        <feMergeNode in="coloredBlur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <filter id="threadGlow">
+      <feGaussianBlur stdDeviation="3" result="coloredBlur"/>
+      <feMerge>
+        <feMergeNode in="coloredBlur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <rect width="512" height="512" rx="80" ry="80" fill="url(#bg)"/>
+
+  <!-- Subtle grid lines (code editor feel) -->
+  <g opacity="0.06" stroke="#e2e8f0" stroke-width="1">
+    <line x1="80" y1="120" x2="432" y2="120"/>
+    <line x1="80" y1="160" x2="432" y2="160"/>
+    <line x1="80" y1="200" x2="432" y2="200"/>
+    <line x1="80" y1="240" x2="432" y2="240"/>
+    <line x1="80" y1="280" x2="432" y2="280"/>
+    <line x1="80" y1="320" x2="432" y2="320"/>
+    <line x1="80" y1="360" x2="432" y2="360"/>
+    <line x1="80" y1="400" x2="432" y2="400"/>
+  </g>
+
+  <!-- Highlighted line (the "found" line) -->
+  <rect x="70" y="244" width="372" height="32" rx="4" fill="#6366f1" opacity="0.15"/>
+
+  <!-- Needle — diagonal, going from bottom-left to top-right -->
+  <g filter="url(#glow)">
+    <!-- Needle body -->
+    <line x1="145" y1="390" x2="355" y2="130"
+          stroke="url(#needle)" stroke-width="8" stroke-linecap="round"/>
+    <!-- Needle tip (sharper) -->
+    <polygon points="355,130 362,148 348,148" fill="#e2e8f0"/>
+    <!-- Needle eye -->
+    <ellipse cx="165" cy="368" rx="6" ry="12"
+             fill="none" stroke="#cbd5e1" stroke-width="2.5"
+             transform="rotate(-53, 165, 368)"/>
+  </g>
+
+  <!-- Thread coming through the eye -->
+  <g filter="url(#threadGlow)">
+    <path d="M 155 378 Q 120 410, 140 430 Q 160 450, 130 460"
+          fill="none" stroke="url(#thread)" stroke-width="3.5"
+          stroke-linecap="round" opacity="0.9"/>
+  </g>
+
+  <!-- Match highlight on the "found" line -->
+  <rect x="180" y="250" width="80" height="20" rx="3" fill="#6366f1" opacity="0.5"/>
+
+  <!-- Text: "needle" subtle at bottom -->
+  <text x="256" y="478" text-anchor="middle"
+        font-family="system-ui, -apple-system, sans-serif"
+        font-size="36" font-weight="700" letter-spacing="8"
+        fill="#6366f1" opacity="0.7">NEEDLE</text>
+</svg>

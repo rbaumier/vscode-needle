@@ -176,8 +176,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7a2d987857b319362043e95f5353c0535c1f58eec5336fdfcf626430af7def58"
 
 [[package]]
-name = "rust-fuzzy"
-version = "0.1.0"
+name = "rust-needle"
+version = "1.0.0"
 dependencies = [
  "napi",
  "napi-build",

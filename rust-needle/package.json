@@ -1,10 +1,10 @@
 {
-  "name": "rust-fuzzy",
-  "version": "0.1.0",
+  "name": "rust-needle",
+  "version": "1.0.0",
   "main": "index.js",
   "types": "index.d.ts",
   "napi": {
-    "binaryName": "rust-fuzzy"
+    "binaryName": "rust-needle"
   },
   "scripts": {
     "build": "napi build --platform --release"

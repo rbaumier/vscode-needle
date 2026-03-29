@@ -7,8 +7,7 @@ struct Word {
     end: usize,
 }
 
-/// Calculate highlights from match indices
-/// Groups consecutive indices into [start, end] ranges
+/// Groups consecutive indices into [start, end] highlight ranges
 fn calculate_highlights(indices: &[u32]) -> Vec<Vec<u32>> {
     if indices.is_empty() {
         return vec![];
@@ -33,15 +32,13 @@ fn calculate_highlights(indices: &[u32]) -> Vec<Vec<u32>> {
     highlights
 }
 
-/// Calculate selection bounds following TypeScript logic (Cas A or Cas B)
-/// Returns (selection_start, selection_end)
+/// Calculate selection bounds (single word or span of words)
 fn calculate_selection_bounds(
     line: &str,
     match_indices: &[u32],
 ) -> (usize, usize) {
     use std::collections::HashSet;
 
-    // Find all words in the line (mimics /\w+/g regex)
     let mut words: Vec<Word> = Vec::new();
     let mut current_word_start = None;
 
@@ -60,7 +57,6 @@ fn calculate_selection_bounds(
         }
     }
 
-    // Handle word at end of line
     if let Some(start) = current_word_start {
         words.push(Word {
             start,
@@ -68,7 +64,6 @@ fn calculate_selection_bounds(
         });
     }
 
-    // Find which words contain highlighted characters
     let mut highlighted_word_indices: HashSet<usize> = HashSet::new();
 
     for &char_index in match_indices {
@@ -80,19 +75,15 @@ fn calculate_selection_bounds(
         }
     }
 
-    // Determine selection based on distribution of highlighted characters
     if highlighted_word_indices.is_empty() {
-        // Fallback: no words found (shouldn't happen in normal cases)
         let start = *match_indices.first().unwrap_or(&0) as usize;
         let end = *match_indices.last().unwrap_or(&0) as usize + 1;
         (start, end)
     } else if highlighted_word_indices.len() == 1 {
-        // Cas A: All highlights in ONE word → select that entire word
         let word_idx = *highlighted_word_indices.iter().next().unwrap();
         let selected_word = &words[word_idx];
         (selected_word.start, selected_word.end)
     } else {
-        // Cas B: Highlights span MULTIPLE words → select from first to last word
         let mut word_indices: Vec<usize> = highlighted_word_indices.iter().copied().collect();
         word_indices.sort();
         let first_word = &words[word_indices[0]];
@@ -101,9 +92,8 @@ fn calculate_selection_bounds(
     }
 }
 
-/// Plain text substring search (char-level)
-/// Smart case: case-insensitive unless query contains uppercase
-/// Returns the char index of the first match, or None
+/// Plain text substring search (char-level).
+/// Smart case: case-insensitive unless query contains uppercase.
 fn find_plain(line_chars: &[char], pattern_chars: &[char], case_insensitive: bool) -> Option<usize> {
     let plen = pattern_chars.len();
 
@@ -128,7 +118,7 @@ fn find_plain(line_chars: &[char], pattern_chars: &[char], case_insensitive: boo
 }
 
 #[napi(object)]
-pub struct FuzzyMatch {
+pub struct SearchMatch {
     pub line_index: u32,
     pub line_content: String,
     pub score: i32,
@@ -143,16 +133,14 @@ pub struct FuzzyMatch {
 /// Document source: either text content or file path
 #[napi(object)]
 pub struct DocumentSource {
-    /// Text content (if document is dirty or unsaved)
     pub text: Option<String>,
-    /// File path (if document is clean and saved)
     pub path: Option<String>,
 }
 
-/// Plain text search from document source (hybrid: text or file path)
-/// Returns matches in line order (first occurrence per line)
+/// Search document by text content or file path.
+/// Returns matches in line order (first occurrence per line).
 #[napi]
-pub fn fuzzy_search_document(source: DocumentSource, pattern: String, limit: Option<u32>) -> Vec<FuzzyMatch> {
+pub fn search_document(source: DocumentSource, pattern: String, limit: Option<u32>) -> Vec<SearchMatch> {
     use std::fs;
     use std::io::{self, BufRead};
 
@@ -180,25 +168,24 @@ pub fn fuzzy_search_document(source: DocumentSource, pattern: String, limit: Opt
         return vec![];
     };
 
-    plain_search_internal(lines, pattern, limit)
+    search_internal(lines, pattern, limit)
 }
 
-/// Legacy function for backward compatibility
+/// Search lines for a pattern. Exported for testing and direct use.
 #[napi]
-pub fn fuzzy_search(lines: Vec<String>, pattern: String, limit: Option<u32>) -> Vec<FuzzyMatch> {
-    plain_search_internal(lines, pattern, limit)
+pub fn search(lines: Vec<String>, pattern: String, limit: Option<u32>) -> Vec<SearchMatch> {
+    search_internal(lines, pattern, limit)
 }
 
-/// Internal plain text search implementation
-/// Smart case: case-insensitive unless query contains uppercase
-fn plain_search_internal(lines: Vec<String>, pattern: String, limit: Option<u32>) -> Vec<FuzzyMatch> {
+/// Internal plain text search implementation.
+/// Smart case: case-insensitive unless query contains uppercase.
+fn search_internal(lines: Vec<String>, pattern: String, limit: Option<u32>) -> Vec<SearchMatch> {
     if pattern.is_empty() {
         return vec![];
     }
 
     let limit = limit.unwrap_or(100) as usize;
 
-    // Smart case: case-insensitive unless query contains uppercase
     let case_insensitive = !pattern.chars().any(|c| c.is_uppercase());
 
     let pattern_chars: Vec<char> = if case_insensitive {
@@ -208,7 +195,7 @@ fn plain_search_internal(lines: Vec<String>, pattern: String, limit: Option<u32>
     };
     let pattern_len = pattern_chars.len();
 
-    let mut results: Vec<FuzzyMatch> = Vec::with_capacity(limit.min(lines.len() / 10));
+    let mut results: Vec<SearchMatch> = Vec::with_capacity(limit.min(lines.len() / 10));
 
     for (idx, line) in lines.iter().enumerate() {
         if results.len() >= limit {
@@ -221,12 +208,11 @@ fn plain_search_internal(lines: Vec<String>, pattern: String, limit: Option<u32>
             let match_start = char_pos as u32;
             let match_end = (char_pos + pattern_len) as u32;
 
-            // Contiguous match indices
             let match_indices: Vec<u32> = (match_start..match_end).collect();
 
             let (sel_start, sel_end) = calculate_selection_bounds(line, &match_indices);
 
-            results.push(FuzzyMatch {
+            results.push(SearchMatch {
                 line_index: idx as u32,
                 line_content: line.clone(),
                 score: 0,
@@ -254,7 +240,7 @@ mod tests {
         expected_start: u32,
         expected_end: u32,
     ) {
-        let results = fuzzy_search(vec![line.to_string()], query.to_string(), Some(5));
+        let results = search(vec![line.to_string()], query.to_string(), Some(5));
 
         assert!(!results.is_empty(), "[{}] Should find match for '{}'", test_name, query);
         let result = &results[0];
@@ -272,7 +258,7 @@ mod tests {
     }
 
     fn assert_no_match(test_name: &str, line: &str, query: &str) {
-        let results = fuzzy_search(vec![line.to_string()], query.to_string(), Some(5));
+        let results = search(vec![line.to_string()], query.to_string(), Some(5));
         assert!(results.is_empty(), "[{}] Should NOT find match for '{}'", test_name, query);
     }
 
@@ -298,7 +284,6 @@ mod tests {
 
     #[test]
     fn test_case_sensitive_when_uppercase_in_query() {
-        // Query has uppercase → case-sensitive
         assert_match(
             "case sensitive uppercase query",
             "function ApplySelection() {",
@@ -313,20 +298,18 @@ mod tests {
     }
 
     #[test]
-    fn test_no_fuzzy_matching() {
-        // "afrm" should NOT match "applySelectionFromItem" (non-contiguous chars)
+    fn test_non_contiguous_chars_do_not_match() {
         assert_no_match(
-            "no fuzzy: scattered chars across word",
+            "scattered chars across word",
             "function applySelectionFromItem() {",
             "afrm",
         );
     }
 
     #[test]
-    fn test_no_fuzzy_scattered_chars() {
-        // "expfnitem" should NOT match (scattered chars)
+    fn test_scattered_chars_do_not_match() {
         assert_no_match(
-            "no fuzzy: scattered chars",
+            "scattered chars",
             "export async function applySelectionFromItem(): boolean {",
             "expfnitem",
         );
@@ -334,25 +317,20 @@ mod tests {
 
     #[test]
     fn test_contiguous_match_in_identifier() {
-        // "ondid" won't match "onDidAccept" but "onDid" (case-insensitive) would
-        // since "ondid" lowered matches "ondid" in "onDidAccept" lowered → "ondidaccept"
-        // Wait: "onDidAccept" lowered = "ondidaccept", and "ondid" is a substring of that!
-        // So this SHOULD match case-insensitively.
         let line = "function onDidAccept() {";
-        let results = fuzzy_search(vec![line.to_string()], "ondid".to_string(), Some(5));
+        let results = search(vec![line.to_string()], "ondid".to_string(), Some(5));
         assert!(!results.is_empty(), "ondid should match onDidAccept case-insensitively");
         let r = &results[0];
-        assert_eq!(r.match_start, 9); // "onDid" starts at char 9
-        assert_eq!(r.match_end, 14);  // 5 chars
+        assert_eq!(r.match_start, 9);
+        assert_eq!(r.match_end, 14);
     }
 
     #[test]
     fn test_selection_bounds_single_word() {
         let line = "export async function applySelectionFromItem(): boolean {";
-        let results = fuzzy_search(vec![line.to_string()], "apply".to_string(), Some(5));
+        let results = search(vec![line.to_string()], "apply".to_string(), Some(5));
         assert!(!results.is_empty());
         let r = &results[0];
-        // Match is inside "applySelectionFromItem" → Cas A: select entire word
         assert_eq!(r.selection_start, 22);
         assert_eq!(r.selection_end, 44);
     }
@@ -360,10 +338,9 @@ mod tests {
     #[test]
     fn test_highlights_contiguous() {
         let line = "const foo = bar";
-        let results = fuzzy_search(vec![line.to_string()], "foo".to_string(), Some(5));
+        let results = search(vec![line.to_string()], "foo".to_string(), Some(5));
         assert!(!results.is_empty());
         let r = &results[0];
-        // Highlights should be a single contiguous range
         assert_eq!(r.highlights.len(), 1);
         assert_eq!(r.highlights[0], vec![6, 9]);
     }
@@ -376,9 +353,8 @@ mod tests {
             "second line with foo".to_string(),
             "fourth foo line".to_string(),
         ];
-        let results = fuzzy_search(lines, "foo".to_string(), Some(10));
+        let results = search(lines, "foo".to_string(), Some(10));
         assert_eq!(results.len(), 3);
-        // Results should be in line order
         assert_eq!(results[0].line_index, 0);
         assert_eq!(results[1].line_index, 2);
         assert_eq!(results[2].line_index, 3);
@@ -386,14 +362,14 @@ mod tests {
 
     #[test]
     fn test_empty_pattern() {
-        let results = fuzzy_search(vec!["hello".to_string()], "".to_string(), Some(5));
+        let results = search(vec!["hello".to_string()], "".to_string(), Some(5));
         assert!(results.is_empty());
     }
 
     #[test]
     fn test_limit() {
         let lines: Vec<String> = (0..200).map(|i| format!("line {} with foo", i)).collect();
-        let results = fuzzy_search(lines, "foo".to_string(), Some(50));
+        let results = search(lines, "foo".to_string(), Some(50));
         assert_eq!(results.len(), 50);
     }
 }

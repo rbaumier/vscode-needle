@@ -7,6 +7,8 @@ test/**
 tsconfig.json
 biome.json
 .ultracite.json
+.oxfmtrc.json
+.vscode-test.mjs
 yarn.lock
 bun.lockb
 bun.lock
@@ -20,10 +22,12 @@ TESTING.md
 .env
 .claude/**
 releases/**
-rust-fuzzy/src/**
-rust-fuzzy/target/**
-rust-fuzzy/.vscodeignore
-rust-fuzzy/Cargo.*
-rust-fuzzy/build.rs
+rust-needle/src/**
+rust-needle/target/**
+rust-needle/.vscodeignore
+rust-needle/Cargo.*
+rust-needle/build.rs
 test-rust.js
 fzf
+target/**
+rust-needle/.claude/**
