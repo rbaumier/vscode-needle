@@ -1,0 +1,79 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: macos-13
+            rust-target: x86_64-apple-darwin
+            vsce-target: darwin-x64
+          - os: macos-13
+            rust-target: aarch64-apple-darwin
+            vsce-target: darwin-arm64
+          - os: ubuntu-latest
+            rust-target: x86_64-unknown-linux-gnu
+            vsce-target: linux-x64
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust-target }}
+
+      - uses: oven-sh/setup-bun@v2
+
+      - run: bun install
+
+      - name: Build Rust native module
+        run: |
+          cd rust-needle
+          npx napi build --platform --release --target ${{ matrix.rust-target }} --dts index.d.ts
+
+      - name: Build TypeScript
+        run: bun run build
+
+      - name: Package VSIX
+        run: bunx vsce package --no-dependencies --target ${{ matrix.vsce-target }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vsix-${{ matrix.vsce-target }}
+          path: "*.vsix"
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: vsix-*
+          merge-multiple: true
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Publish to VS Code Marketplace
+        run: bunx vsce publish --packagePath *.vsix
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+
+      - name: Publish to OpenVSX
+        run: |
+          for vsix in *.vsix; do
+            bunx ovsx publish "$vsix" -p ${{ secrets.OVSX_TOKEN }}
+          done
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: "*.vsix"
+          generate_release_notes: true
