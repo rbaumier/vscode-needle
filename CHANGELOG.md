@@ -1,57 +1,48 @@
 # Change Log
 
-All notable changes to the "go-to-fuzzy" extension will be documented in this file.
+All notable changes to the "needle" extension will be documented in this file.
 
 Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how to structure this file.
 
-**Download releases**: See [releases/](./releases/) directory or [GitHub Releases](https://github.com/rbaumier/vscode-go-to-fuzzy/releases)
+## [1.0.0] - 2026-03-29
+
+### Changed
+- **BREAKING**: Renamed extension from "Go to Fuzzy" to "Needle"
+  - Command: `go-to-fuzzy.find` → `needle.find`
+  - Users need to update keybindings
+- Replaced fuzzy matching with plain substring search (smart case)
+- New logo and branding
+
+### Removed
+- Fuzzy matching algorithm (SkimMatcherV2) — replaced by faster substring search
+- `fzf` requirement — no external dependencies needed
 
 ## [0.0.4] - 2024-10-24
 
 ### Changed
-- **BREAKING**: Complete rewrite of fuzzy matching engine
+- **BREAKING**: Complete rewrite of search engine
   - Replaced fzf shell command with native Rust implementation
-  - Uses SkimMatcherV2 algorithm (same as zaplr) with Damerau-Levenshtein distance
   - 10-50x faster performance on large files
-  - Accurate match position highlighting with hybrid scoring
-  - Unicode normalization for accent-insensitive matching
 
 ### Added
-- Native Rust fuzzy search module with Node.js bindings (napi-rs)
-- Comprehensive test suite for fuzzy matching algorithm
-- Biome for linting and formatting (replaces ESLint/Prettier)
-- Ultracite for import management
-- Bun as package manager, bundler, and test runner
+- Native Rust search module with Node.js bindings (napi-rs)
+- Biome for linting and formatting
+- Bun as package manager and bundler
 
 ### Removed
-- fzf dependency (no longer requires external binary)
-- shell-quote dependency
-- ESLint and all TypeScript-ESLint dependencies
-- Prettier configuration
-- esbuild dependency (replaced by Bun)
-- Mocha test dependencies (migrated to Bun test)
-
-### Infrastructure
-- Package manager: Yarn → Bun
-- Bundler: esbuild → Bun build
-- Linter/Formatter: ESLint/Prettier → Biome + Ultracite
-- Search engine: fzf (shell) → Rust native module
-- VSCode engine requirement: ^1.80.0 for broader Cursor compatibility
+- fzf dependency
+- ESLint/Prettier
+- esbuild (replaced by Bun)
 
 ## [0.0.3] - 2024-10-24
 
 ### Added
-- Visual markers (► ◄) around matched text in search results
+- Visual markers around matched text
 - Cursor editor compatibility
 
 ### Fixed
-- Removed redundant pattern prefix from search result labels
-- Line numbers no longer match search patterns (only content is searched)
-- Matched text is now selected even when hitting Enter immediately
-- QuickPick results maintain fzf ranking order
-
-### Changed
-- Search result display format: now shows "lineNumber: content" instead of "pattern - lineNumber: content"
+- Line numbers no longer match search patterns
+- Matched text is now selected on Enter
 
 ## [0.0.2] - 2021-04-24
 

@@ -1,64 +1,55 @@
-# Go to Fuzzy
+# Needle
 
 <p align="center">
-  <img alt="Extension in action" src="https://github.com/rbaumier/vscode-go-to-fuzzy/blob/master/assets/icon.png?raw=true" width="200">
+  <img alt="Needle icon" src="https://github.com/rbaumier/vscode-needle/blob/master/assets/icon.png?raw=true" width="200">
 </p>
 
-## 👓 What
+## What
 
-Go-to-Fuzzy is a VSCode extension making fuzzy search/go-to inside a file possible.
+Needle is a VSCode/Cursor extension for fast in-file text search. Type a pattern, see all matching lines, jump to the one you want.
+
+Powered by a native Rust engine for instant results, even on large files.
 
 <p align="center">
-  <img alt="Extension in action" src="https://github.com/rbaumier/vscode-go-to-fuzzy/blob/master/assets/demo.gif?raw=true">
+  <img alt="Extension in action" src="https://github.com/rbaumier/vscode-needle/blob/master/assets/demo.gif?raw=true">
 </p>
-
-## ✅ Requirements
-
-- Linux/MacOS
-- [The awesome fzf](https://github.com/junegunn/fzf) available
 
 ## Installation
 
 ### VSCode
 
-[Install from the VSCode Marketplace](https://marketplace.visualstudio.com/items?itemName=rbaumier.go-to-fuzzy)
+[Install from the VSCode Marketplace](https://marketplace.visualstudio.com/items?itemName=rbaumier.needle)
 
 ### Cursor
 
-[Install from Open VSX](https://open-vsx.org/extension/rbaumier/go-to-fuzzy)
+[Install from Open VSX](https://open-vsx.org/extension/rbaumier/needle)
 
-Or search for "Go to Fuzzy" directly in the Cursor extensions panel.
+Or search for "Needle" directly in the Cursor extensions panel.
 
 > **Note:** This extension works on both VSCode and Cursor.
 
-## 🚀 Usage
+## Usage
 
-### Set a keyboard shortcut via:
+### Set a keyboard shortcut
 
-1. Open **Command Palette** (⌘/Ctrl + Shift + p)
+1. Open **Command Palette** (Cmd/Ctrl + Shift + P)
 2. Choose **"Preferences: Open Keyboard Shortcuts"**
-3. Search for **"go-to-fuzzy.find"**
+3. Search for **"needle.find"**
 4. Set a **keybinding**
 
-### Or, if you just want to try
+### Or, just try it
 
-1. Open Command Palette **(⌘/Ctrl + Shift + p)**
-2. Choose **"Go to Fuzzy: find"**
+1. Open Command Palette **(Cmd/Ctrl + Shift + P)**
+2. Choose **"Needle: Find in file"**
 
-## 🤔 Motivations
+## How it works
 
-Without an extension, there is several ways to go to a targeted pattern in the active file, but I find them to be suboptimal:
+- **Smart case**: case-insensitive by default, case-sensitive if your query contains uppercase
+- **Substring matching**: finds exact contiguous matches in each line
+- **Rust-powered**: native search engine via napi-rs for sub-millisecond performance
+- **Results in line order**: matches appear top-to-bottom as they occur in the file
 
-- **Built-in search**
-  - 👎 only show one result at a time, making it painful to cycle through them
-  - 👎 no fuzzy: you have to type an exact match (or use a regex for wildcards)
-- **Symbols and references**
-  - 👍 fuzzy works great
-  - 👎 only fetch symbols and references (duh!)
-  - 👎 heavily dependent on language integrations
-- **Scroll manually:** good enough on small files but can be quite painful with big ones
-
-## ❔ FAQ
+## FAQ
 
 ### Does this work on Cursor?
 
@@ -66,4 +57,4 @@ Yes! The extension works on both VSCode and Cursor.
 
 ### How are search results ordered?
 
-Results are ordered by fzf's fuzzy matching algorithm, showing the best matches first. The extension preserves fzf's ranking by disabling VSCode's default filtering.
+Results are displayed in line order (top to bottom). The first match in the file appears first.

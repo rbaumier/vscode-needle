@@ -1,6 +1,6 @@
 [package]
-name = "rust-fuzzy"
-version = "0.1.0"
+name = "rust-needle"
+version = "1.0.0"
 edition = "2021"
 
 [lib]
@@ -20,4 +20,4 @@ codegen-units = 1
 strip = true
 
 [package.metadata.napi]
-name = "rust-fuzzy"
+name = "rust-needle"

@@ -1,21 +1,21 @@
 {
-  "name": "go-to-fuzzy",
-  "displayName": "Go to Fuzzy in current file",
-  "description": "go to fuzzy matching chunks in current file",
+  "name": "needle",
+  "displayName": "Needle — Find in current file",
+  "description": "Fast in-file search powered by Rust. Find any text in the active file instantly.",
   "publisher": "rbaumier",
-  "version": "0.0.4",
+  "version": "1.0.0",
   "license": "MIT",
-  "homepage": "https://github.com/rbaumier/vscode-go-to-fuzzy",
+  "homepage": "https://github.com/rbaumier/vscode-needle",
   "repository": {
     "type": "git",
-    "url": "https://github.com/rbaumier/vscode-go-to-fuzzy.git"
+    "url": "https://github.com/rbaumier/vscode-needle.git"
   },
   "bugs": {
-    "url": "https://github.com/rbaumier/vscode-go-to-fuzzy/issues"
+    "url": "https://github.com/rbaumier/vscode-needle/issues"
   },
   "icon": "assets/icon.png",
   "galleryBanner": {
-    "color": "#98cedd",
+    "color": "#1a1a2e",
     "theme": "dark"
   },
   "engines": {
@@ -27,40 +27,34 @@
   ],
   "main": "./out/main.js",
   "activationEvents": [
-    "onCommand:go-to-fuzzy.find"
+    "onCommand:needle.find"
   ],
   "contributes": {
     "commands": [
       {
-        "command": "go-to-fuzzy.find",
-        "title": "Go to Fuzzy: find"
+        "command": "needle.find",
+        "title": "Needle: Find in file"
       }
     ]
   },
   "scripts": {
-    "lint": "biome check ./src",
-    "lint:fix": "biome check --write ./src",
-    "format": "biome format --write ./src",
-    "check": "biome ci ./src",
+    "format": "oxfmt ./src",
+    "check": "oxfmt --check ./src",
     "build": "bun build ./src/main.ts --outdir=./out --target=node --format=cjs --minify --external=vscode",
     "build:dev": "bun build ./src/main.ts --outdir=./out --target=node --format=cjs --sourcemap=external --external=vscode",
     "build:test": "bun build ./test/e2e/extension.e2e.test.ts --outdir=./out/test/e2e --target=node --format=cjs --external=vscode --external=assert --external=mocha",
-    "build:rust": "cd rust-fuzzy && napi build --platform --release --dts index.d.ts",
+    "build:rust": "cd rust-needle && napi build --platform --release --dts index.d.ts",
     "build:all": "bun run build:rust && bun run build",
     "clean": "rm -rf out/ *.vsix",
     "rebuild": "bun run clean && bun run build:all",
     "watch": "bun build ./src/main.ts --outdir=./out --target=node --format=cjs --external=vscode --watch",
     "test:e2e": "bun run build:dev && bun run build:test && vscode-test",
     "package": "bun x vsce package --no-dependencies",
-    "uninstall": "cursor --uninstall-extension rbaumier.go-to-fuzzy || true",
-    "install:local": "cursor --install-extension $(ls -t go-to-fuzzy-*.vsix | head -1)",
-    "reinstall": "bun run uninstall && bun run rebuild && bun run package && bun run install:local && echo '✅ Extension rebuilt and reinstalled successfully!'",
     "publish:vscode": "bun x vsce publish --no-dependencies",
     "publish:ovsx": "bun x ovsx publish -p $OVSX_TOKEN",
     "publish:all": "bun run publish:vscode && bun run publish:ovsx"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.2.6",
     "@types/mocha": "^10.0.10",
     "@types/node": "^12.11.7",
     "@types/vscode": "^1.55.0",
@@ -69,7 +63,7 @@
     "@vscode/vsce": "^3.6.2",
     "mocha": "^11.7.4",
     "ovsx": "^0.10.6",
-    "typescript": "^5.0.0",
-    "ultracite": "5.6.4"
+    "oxfmt": "^0.42.0",
+    "typescript": "^5.0.0"
   }
 }
