@@ -118,8 +118,8 @@ if (!nativeBinding) {
   throw new Error("Failed to load native binding");
 }
 
-const { search, searchDocument, DocumentSource } = nativeBinding;
+const { search, searchText, searchFile } = nativeBinding;
 
 module.exports.search = search;
-module.exports.searchDocument = searchDocument;
-module.exports.DocumentSource = DocumentSource;
+module.exports.searchText = searchText;
+module.exports.searchFile = searchFile;
