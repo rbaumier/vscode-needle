@@ -5,15 +5,18 @@ on:
     tags:
       - "v*"
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   build:
     strategy:
       matrix:
         include:
-          - os: macos-13
+          - os: macos-latest
             rust-target: x86_64-apple-darwin
             vsce-target: darwin-x64
-          - os: macos-13
+          - os: macos-latest
             rust-target: aarch64-apple-darwin
             vsce-target: darwin-arm64
           - os: ubuntu-latest
@@ -45,7 +48,7 @@ jobs:
         run: bun run build
 
       - name: Run native tests
-        if: matrix.rust-target == 'x86_64-apple-darwin' || matrix.rust-target == 'x86_64-unknown-linux-gnu'
+        if: matrix.rust-target != 'aarch64-apple-darwin'
         run: bun test
 
       - name: Package VSIX
