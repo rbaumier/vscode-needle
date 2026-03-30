@@ -82,10 +82,9 @@ export function activate(context: ExtensionContext): void {
 
       if (newItems.length > 0) {
         const targetIndex = Math.min(focusIndex, newItems.length - 1);
-        quickPick.activeItems = [quickPick.items[targetIndex]];
-
         const targetItem = quickPick.items[targetIndex];
-        if (targetItem.selection) {
+        if (targetItem) {
+          quickPick.activeItems = [targetItem];
           applySelectionFromItem(targetItem);
         }
       }

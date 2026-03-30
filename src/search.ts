@@ -18,9 +18,9 @@ const WORD_RE = /\w/;
 /** Expand match to word boundaries in the line content. */
 function selectionBounds(lineContent: string, matchStart: number, matchEnd: number): [number, number] {
   let s = matchStart;
-  while (s > 0 && WORD_RE.test(lineContent[s - 1])) s--;
+  while (s > 0 && WORD_RE.test(lineContent.charAt(s - 1))) s--;
   let e = matchEnd;
-  while (e < lineContent.length && WORD_RE.test(lineContent[e])) e++;
+  while (e < lineContent.length && WORD_RE.test(lineContent.charAt(e))) e++;
   return [s, e];
 }
 
@@ -28,11 +28,11 @@ function resultsToQuickPickItems(results: SearchResults, text: string): QuickPic
   const items: QuickPickLineItem[] = [];
 
   for (let i = 0; i < results.count; i++) {
-    const lineNumber = results.lineIndices[i];
+    const lineNumber = results.lineIndices[i] ?? 0;
     const lineNumberStr = String(lineNumber + 1);
-    const lineContent = text.substring(results.lineByteStarts[i], results.lineByteEnds[i]);
-    const matchStart = results.matchStarts[i];
-    const matchEnd = results.matchEnds[i];
+    const lineContent = text.substring(results.lineByteStarts[i] ?? 0, results.lineByteEnds[i] ?? 0);
+    const matchStart = results.matchStarts[i] ?? 0;
+    const matchEnd = results.matchEnds[i] ?? 0;
 
     const [selStart, selEnd] = selectionBounds(lineContent, matchStart, matchEnd);
 
@@ -126,7 +126,7 @@ export function search(pattern: string, limit = DEFAULT_LIMIT): QuickPickLineIte
       description: "",
       alwaysShow: true,
       isMore: true,
-      selection: items[items.length - 1].selection,
+      selection: items.at(-1)?.selection ?? new Selection(new Position(0, 0), new Position(0, 0)),
     });
   }
 
