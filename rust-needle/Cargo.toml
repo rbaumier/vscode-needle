@@ -8,6 +8,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 memchr = "2"
+memmap2 = "0.9"
 napi = { version = "2", default-features = false, features = ["napi4"] }
 napi-derive = "2"
 
