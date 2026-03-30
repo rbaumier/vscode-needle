@@ -91,7 +91,7 @@ function findInDocument(pattern: string): SearchMatch[] | null {
     };
   })();
 
-  const matches = searchDocument(documentSource, pattern, LIMIT_MATCHES);
+  const matches = searchDocument(documentSource, pattern, LIMIT_MATCHES + 1);
 
   searchCache.set(filePath, pattern, fileVersion, matches);
 
@@ -108,5 +108,18 @@ export function search(pattern: string): QuickPickLineItem[] {
     return [];
   }
 
-  return matchesToQuickPickItems(matches);
+  const hasMore = matches.length > LIMIT_MATCHES;
+  const displayMatches = hasMore ? matches.slice(0, LIMIT_MATCHES) : matches;
+  const items = matchesToQuickPickItems(displayMatches);
+
+  if (hasMore) {
+    items.push({
+      label: `$(ellipsis) ${matches.length - 1}+ more results...`,
+      description: "",
+      alwaysShow: true,
+      selection: items[items.length - 1].selection,
+    });
+  }
+
+  return items;
 }

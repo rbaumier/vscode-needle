@@ -2,6 +2,7 @@ use std::collections::HashSet;
 use std::fs;
 use std::io::{self, BufRead};
 
+use memchr::memmem;
 use napi_derive::napi;
 
 /// Word structure for selection bounds calculation
@@ -88,29 +89,51 @@ fn calculate_selection_bounds(line_chars: &[char], match_indices: &[u32]) -> (us
     }
 }
 
-/// Plain text substring search (char-level).
-/// Smart case: case-insensitive unless query contains uppercase.
-fn find_plain(
-    line_chars: &[char],
-    pattern_chars: &[char],
-    case_insensitive: bool,
-) -> Option<usize> {
-    let plen = pattern_chars.len();
-
-    if plen == 0 || plen > line_chars.len() {
+/// SIMD-accelerated byte-level substring search using memchr::memmem.
+/// Returns the char index of the match start, or None.
+/// For case-sensitive ASCII patterns this is extremely fast (SIMD two-way algorithm).
+/// For case-insensitive, falls back to char-level comparison.
+fn find_in_line(line: &str, pattern: &str, finder: Option<&memmem::Finder<'_>>, case_insensitive: bool) -> Option<usize> {
+    if pattern.is_empty() || line.len() < pattern.len() {
         return None;
     }
 
+    // Fast path: case-sensitive, ASCII — use SIMD memmem
+    if !case_insensitive {
+        if let Some(f) = finder {
+            let byte_pos = f.find(line.as_bytes())?;
+            // Convert byte offset to char offset
+            return Some(line[..byte_pos].chars().count());
+        }
+    }
+
+    // Case-insensitive or non-ASCII pattern: char-level search
+    let line_chars: Vec<char> = line.chars().collect();
+    let pattern_chars: Vec<char> = if case_insensitive {
+        pattern.chars().map(|c| c.to_lowercase().next().unwrap_or(c)).collect()
+    } else {
+        pattern.chars().collect()
+    };
+    let plen = pattern_chars.len();
+
+    if plen > line_chars.len() {
+        return None;
+    }
+
+    // For case-insensitive ASCII, try SIMD on lowercased bytes first
+    if case_insensitive && pattern.is_ascii() && line.is_ascii() {
+        let lower_line: String = line.to_ascii_lowercase();
+        let lower_pattern: String = pattern.to_ascii_lowercase();
+        if let Some(byte_pos) = memmem::find(lower_line.as_bytes(), lower_pattern.as_bytes()) {
+            return Some(byte_pos); // ASCII: byte pos == char pos
+        }
+        return None;
+    }
+
+    // Full Unicode case-insensitive fallback
     'outer: for i in 0..=(line_chars.len() - plen) {
         for j in 0..plen {
-            let lc = if case_insensitive {
-                line_chars[i + j]
-                    .to_lowercase()
-                    .next()
-                    .unwrap_or(line_chars[i + j])
-            } else {
-                line_chars[i + j]
-            };
+            let lc = line_chars[i + j].to_lowercase().next().unwrap_or(line_chars[i + j]);
             if lc != pattern_chars[j] {
                 continue 'outer;
             }
@@ -118,6 +141,28 @@ fn find_plain(
         return Some(i);
     }
     None
+}
+
+/// Build a SearchMatch from a line match
+fn build_match(line: &str, line_index: u32, char_pos: usize, pattern_char_len: usize) -> SearchMatch {
+    let match_start = char_pos as u32;
+    let match_end = (char_pos + pattern_char_len) as u32;
+    let match_indices: Vec<u32> = (match_start..match_end).collect();
+
+    let line_chars: Vec<char> = line.chars().collect();
+    let (sel_start, sel_end) = calculate_selection_bounds(&line_chars, &match_indices);
+    let highlights = calculate_highlights(&match_indices);
+
+    SearchMatch {
+        line_index,
+        line_content: line.to_string(),
+        match_start,
+        match_end,
+        match_indices,
+        selection_start: sel_start as u32,
+        selection_end: sel_end as u32,
+        highlights,
+    }
 }
 
 #[napi(object)]
@@ -140,7 +185,7 @@ pub struct DocumentSource {
 }
 
 /// Search document by text content or file path.
-/// Returns matches in line order (first occurrence per line).
+/// Streams lines from file — stops reading as soon as limit is reached.
 #[napi]
 pub fn search_document(
     source: DocumentSource,
@@ -151,80 +196,83 @@ pub fn search_document(
         return vec![];
     }
 
-    let lines: Vec<String> = if let Some(text) = source.text {
-        text.lines().map(|s| s.to_string()).collect()
-    } else if let Some(path) = source.path {
-        match fs::File::open(&path) {
-            Ok(file) => io::BufReader::new(file)
-                .lines()
-                .map_while(Result::ok)
-                .collect(),
-            Err(_) => {
-                return vec![];
-            }
-        }
+    let limit = limit.unwrap_or(100) as usize;
+    let case_insensitive = !pattern.chars().any(|c| c.is_uppercase());
+    let pattern_char_len = pattern.chars().count();
+
+    // Build SIMD finder for case-sensitive searches
+    let finder = if !case_insensitive {
+        Some(memmem::Finder::new(pattern.as_bytes()))
     } else {
-        return vec![];
+        None
     };
 
-    search_internal(&lines, pattern, limit)
+    // Text source: already in memory, iterate lines directly
+    if let Some(text) = source.text {
+        let mut results = Vec::with_capacity(limit);
+        for (idx, line) in text.lines().enumerate() {
+            if results.len() >= limit {
+                break;
+            }
+            if let Some(char_pos) = find_in_line(line, &pattern, finder.as_ref(), case_insensitive) {
+                results.push(build_match(line, idx as u32, char_pos, pattern_char_len));
+            }
+        }
+        return results;
+    }
+
+    // File source: stream with BufReader, stop at limit
+    if let Some(path) = source.path {
+        let file = match fs::File::open(&path) {
+            Ok(f) => f,
+            Err(_) => return vec![],
+        };
+        let reader = io::BufReader::new(file);
+        let mut results = Vec::with_capacity(limit);
+
+        for (idx, line_result) in reader.lines().enumerate() {
+            if results.len() >= limit {
+                break;
+            }
+            let line = match line_result {
+                Ok(l) => l,
+                Err(_) => break,
+            };
+            if let Some(char_pos) = find_in_line(&line, &pattern, finder.as_ref(), case_insensitive) {
+                results.push(build_match(&line, idx as u32, char_pos, pattern_char_len));
+            }
+        }
+        return results;
+    }
+
+    vec![]
 }
 
 /// Search lines for a pattern. Exported for testing and direct use.
 #[napi]
 pub fn search(lines: Vec<String>, pattern: String, limit: Option<u32>) -> Vec<SearchMatch> {
-    search_internal(&lines, pattern, limit)
-}
-
-/// Internal plain text search implementation.
-/// Smart case: case-insensitive unless query contains uppercase.
-fn search_internal(lines: &[String], pattern: String, limit: Option<u32>) -> Vec<SearchMatch> {
     if pattern.is_empty() {
         return vec![];
     }
 
     let limit = limit.unwrap_or(100) as usize;
-
     let case_insensitive = !pattern.chars().any(|c| c.is_uppercase());
+    let pattern_char_len = pattern.chars().count();
 
-    let pattern_chars: Vec<char> = if case_insensitive {
-        pattern
-            .chars()
-            .map(|c| c.to_lowercase().next().unwrap_or(c))
-            .collect()
+    let finder = if !case_insensitive {
+        Some(memmem::Finder::new(pattern.as_bytes()))
     } else {
-        pattern.chars().collect()
+        None
     };
-    let pattern_len = pattern_chars.len();
 
-    let mut results: Vec<SearchMatch> = Vec::with_capacity(limit.min(lines.len() / 10));
+    let mut results: Vec<SearchMatch> = Vec::with_capacity(limit);
 
     for (idx, line) in lines.iter().enumerate() {
         if results.len() >= limit {
             break;
         }
-
-        let line_chars: Vec<char> = line.chars().collect();
-
-        if let Some(char_pos) = find_plain(&line_chars, &pattern_chars, case_insensitive) {
-            let match_start = char_pos as u32;
-            let match_end = (char_pos + pattern_len) as u32;
-
-            let match_indices: Vec<u32> = (match_start..match_end).collect();
-
-            let (sel_start, sel_end) = calculate_selection_bounds(&line_chars, &match_indices);
-            let highlights = calculate_highlights(&match_indices);
-
-            results.push(SearchMatch {
-                line_index: idx as u32,
-                line_content: line.clone(),
-                match_start,
-                match_end,
-                match_indices,
-                selection_start: sel_start as u32,
-                selection_end: sel_end as u32,
-                highlights,
-            });
+        if let Some(char_pos) = find_in_line(line, &pattern, finder.as_ref(), case_insensitive) {
+            results.push(build_match(line, idx as u32, char_pos, pattern_char_len));
         }
     }
 

@@ -7,6 +7,7 @@ edition = "2021"
 crate-type = ["cdylib"]
 
 [dependencies]
+memchr = "2"
 napi = { version = "2", default-features = false, features = ["napi4"] }
 napi-derive = "2"
 
