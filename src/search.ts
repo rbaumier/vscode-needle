@@ -2,11 +2,12 @@ import { Position, type QuickPickItem, Selection, window } from "vscode";
 import { type DocumentSource, type SearchMatch, searchDocument } from "../rust-needle";
 import { searchCache } from "./cache";
 
-type QuickPickLineItem = QuickPickItem & {
+export type QuickPickLineItem = QuickPickItem & {
   selection: Selection;
+  isMore?: boolean;
 };
 
-const LIMIT_MATCHES = 100;
+const DEFAULT_LIMIT = 10_000;
 const ELLIPSIS = "... ";
 const MAX_VISIBLE_BEFORE_MATCH = 60;
 const CONTEXT_BEFORE_MATCH = 20;
@@ -55,11 +56,7 @@ function matchesToQuickPickItems(matches: SearchMatch[]): QuickPickLineItem[] {
   });
 }
 
-/**
- * Searches the active document using Rust-powered substring matching.
- * Uses in-memory cache and hybrid file/text source for optimal performance.
- */
-function findInDocument(pattern: string): SearchMatch[] | null {
+function findInDocument(pattern: string, limit: number): SearchMatch[] | null {
   if (pattern.length === 0) {
     return [];
   }
@@ -73,50 +70,38 @@ function findInDocument(pattern: string): SearchMatch[] | null {
   const fileVersion = activeDocument.version;
 
   const cached = searchCache.get(filePath, pattern, fileVersion);
-  if (cached) {
+  if (cached && cached.length >= limit + 1) {
     return cached;
   }
 
-  const documentSource: DocumentSource = (() => {
-    if (activeDocument.isDirty || activeDocument.isUntitled) {
-      return {
-        text: activeDocument.getText(),
-        path: undefined,
-      };
-    }
-    const fsPath = activeDocument.uri.fsPath;
-    return {
-      text: undefined,
-      path: fsPath,
-    };
-  })();
+  const documentSource: DocumentSource =
+    activeDocument.isDirty || activeDocument.isUntitled
+      ? { text: activeDocument.getText() }
+      : { path: activeDocument.uri.fsPath };
 
-  const matches = searchDocument(documentSource, pattern, LIMIT_MATCHES + 1);
+  const matches = searchDocument(documentSource, pattern, limit + 1);
 
   searchCache.set(filePath, pattern, fileVersion, matches);
 
   return matches;
 }
 
-/**
- * Main search entry point. Finds matches in the active document
- * and converts them to QuickPick items with highlighting.
- */
-export function search(pattern: string): QuickPickLineItem[] {
-  const matches = findInDocument(pattern);
+export function search(pattern: string, limit = DEFAULT_LIMIT): QuickPickLineItem[] {
+  const matches = findInDocument(pattern, limit);
   if (!matches) {
     return [];
   }
 
-  const hasMore = matches.length > LIMIT_MATCHES;
-  const displayMatches = hasMore ? matches.slice(0, LIMIT_MATCHES) : matches;
+  const hasMore = matches.length > limit;
+  const displayMatches = hasMore ? matches.slice(0, limit) : matches;
   const items = matchesToQuickPickItems(displayMatches);
 
   if (hasMore) {
     items.push({
-      label: `$(ellipsis) ${matches.length - 1}+ more results...`,
+      label: "$(ellipsis) Load more results...",
       description: "",
       alwaysShow: true,
+      isMore: true,
       selection: items[items.length - 1].selection,
     });
   }

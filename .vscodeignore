@@ -29,6 +29,7 @@ rust-needle/.vscodeignore
 rust-needle/Cargo.*
 rust-needle/build.rs
 test-rust.js
+bench.ts
 fzf
 target/**
 rust-needle/.claude/**

@@ -9,9 +9,10 @@ import {
   workspace,
 } from "vscode";
 import { searchCache } from "./cache";
-import { search } from "./search";
+import { type QuickPickLineItem, search } from "./search";
 
 const INPUT_PLACEHOLDER = "Please input your search pattern.";
+const LIMIT_STEP = 10_000;
 
 const COMMANDS = {
   FIND: "needle.find",
@@ -19,6 +20,7 @@ const COMMANDS = {
 
 interface QuickPickItemWithSelection extends QuickPickItem {
   selection?: Selection;
+  isMore?: boolean;
 }
 
 /**
@@ -58,8 +60,9 @@ export function activate(context: ExtensionContext): void {
     const originalSelection = editor?.selection;
 
     let itemAccepted = false;
+    let currentLimit = LIMIT_STEP;
 
-    const quickPick = window.createQuickPick<QuickPickItemWithSelection>();
+    const quickPick = window.createQuickPick<QuickPickLineItem>();
 
     quickPick.placeholder = INPUT_PLACEHOLDER;
     quickPick.items = [];
@@ -75,27 +78,32 @@ export function activate(context: ExtensionContext): void {
     (quickPick as QuickPickInternal).sortByLabel = false;
     (quickPick as QuickPickInternal).filterProvider = () => null;
 
+    function updateResults(pattern: string, focusIndex = 0) {
+      if (pattern.length === 0) {
+        quickPick.items = [];
+        return;
+      }
+
+      const newItems = search(pattern, currentLimit);
+      quickPick.items = newItems;
+
+      if (newItems.length > 0) {
+        const targetIndex = Math.min(focusIndex, newItems.length - 1);
+        quickPick.activeItems = [quickPick.items[targetIndex]];
+
+        const targetItem = quickPick.items[targetIndex];
+        if (targetItem.selection) {
+          applySelectionFromItem(targetItem);
+        }
+      }
+    }
+
     const disposables: Disposable[] = [];
 
     disposables.push(
       quickPick.onDidChangeValue((newPattern) => {
-        if (newPattern.length === 0) {
-          quickPick.items = [];
-          return;
-        }
-
-        const newItems = search(newPattern);
-
-        quickPick.items = newItems;
-
-        if (newItems.length > 0) {
-          quickPick.activeItems = [quickPick.items[0]];
-
-          const firstItem = quickPick.items[0];
-          if (firstItem.selection) {
-            applySelectionFromItem(firstItem);
-          }
-        }
+        currentLimit = LIMIT_STEP;
+        updateResults(newPattern);
       })
     );
 
@@ -104,13 +112,21 @@ export function activate(context: ExtensionContext): void {
         if (!item) {
           return;
         }
-
         applySelectionFromItem(item);
       })
     );
 
     disposables.push(
       quickPick.onDidAccept(() => {
+        const activeItem = quickPick.activeItems[0] as QuickPickItemWithSelection | undefined;
+
+        if (activeItem?.isMore) {
+          const previousCount = currentLimit;
+          currentLimit += LIMIT_STEP;
+          updateResults(quickPick.value, previousCount);
+          return;
+        }
+
         itemAccepted = true;
         quickPick.hide();
       })
