@@ -55,6 +55,7 @@
     "publish:all": "bun run publish:vscode && bun run publish:ovsx"
   },
   "devDependencies": {
+    "@napi-rs/cli": "^3.6.0",
     "@types/mocha": "^10.0.10",
     "@types/node": "^18",
     "@types/vscode": "^1.55.0",

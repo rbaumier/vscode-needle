@@ -42,7 +42,7 @@ jobs:
       - name: Build Rust native module
         run: |
           cd rust-needle
-          npx napi build --platform --release --target ${{ matrix.rust-target }}
+          bunx napi build --platform --release --target ${{ matrix.rust-target }}
 
       - name: Build TypeScript
         run: bun run build
