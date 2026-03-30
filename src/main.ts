@@ -2,8 +2,6 @@ import {
   type Disposable,
   commands,
   type ExtensionContext,
-  type QuickPickItem,
-  type Selection,
   TextEditorRevealType,
   window,
   workspace,
@@ -18,16 +16,11 @@ const COMMANDS = {
   FIND: "needle.find",
 } as const;
 
-interface QuickPickItemWithSelection extends QuickPickItem {
-  selection?: Selection;
-  isMore?: boolean;
-}
-
 /**
  * Applies the text selection from a QuickPick item to the active editor.
  * Navigates the cursor to the matched line and selects the matched text.
  */
-export function applySelectionFromItem(item: QuickPickItemWithSelection): boolean {
+export function applySelectionFromItem(item: QuickPickLineItem): boolean {
   if (!item?.selection) {
     return false;
   }
@@ -118,7 +111,7 @@ export function activate(context: ExtensionContext): void {
 
     disposables.push(
       quickPick.onDidAccept(() => {
-        const activeItem = quickPick.activeItems[0] as QuickPickItemWithSelection | undefined;
+        const activeItem = quickPick.activeItems[0];
 
         if (activeItem?.isMore) {
           const previousCount = currentLimit;

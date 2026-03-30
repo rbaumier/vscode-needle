@@ -108,7 +108,7 @@ switch (platform) {
     }
     break;
   default:
-    throw new Error(`Unsupported platform: ${platform}`);
+    throw new Error(`Needle does not support ${platform} yet. Supported: macOS, Linux.`);
 }
 
 if (!nativeBinding) {

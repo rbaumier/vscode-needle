@@ -33,13 +33,20 @@ jobs:
 
       - run: bun install
 
+      - name: Run Rust tests
+        run: cd rust-needle && cargo test
+
       - name: Build Rust native module
         run: |
           cd rust-needle
-          npx napi build --platform --release --target ${{ matrix.rust-target }} --dts index.d.ts
+          npx napi build --platform --release --target ${{ matrix.rust-target }}
 
       - name: Build TypeScript
         run: bun run build
+
+      - name: Run native tests
+        if: matrix.rust-target == 'x86_64-apple-darwin' || matrix.rust-target == 'x86_64-unknown-linux-gnu'
+        run: bun test
 
       - name: Package VSIX
         run: bunx vsce package --no-dependencies --target ${{ matrix.vsce-target }}
