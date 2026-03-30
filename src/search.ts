@@ -7,10 +7,21 @@ export type QuickPickLineItem = QuickPickItem & {
   isMore?: boolean;
 };
 
-const DEFAULT_LIMIT = 10_000;
+const DEFAULT_LIMIT = 200;
 const ELLIPSIS = "... ";
 const MAX_VISIBLE_BEFORE_MATCH = 60;
 const CONTEXT_BEFORE_MATCH = 20;
+
+const WORD_RE = /\w/;
+
+/** Expand match to word boundaries in the line content. */
+function selectionBounds(lineContent: string, matchStart: number, matchEnd: number): [number, number] {
+  let s = matchStart;
+  while (s > 0 && WORD_RE.test(lineContent[s - 1])) s--;
+  let e = matchEnd;
+  while (e < lineContent.length && WORD_RE.test(lineContent[e])) e++;
+  return [s, e];
+}
 
 function resultsToQuickPickItems(results: SearchResults, text: string): QuickPickLineItem[] {
   const items: QuickPickLineItem[] = [];
@@ -18,15 +29,14 @@ function resultsToQuickPickItems(results: SearchResults, text: string): QuickPic
   for (let i = 0; i < results.count; i++) {
     const lineNumber = results.lineIndices[i];
     const lineNumberStr = String(lineNumber + 1);
-
-    // Extract line content from text using byte offsets (works for ASCII; for UTF-16 JS strings, byte offset == char index for ASCII)
     const lineContent = text.substring(results.lineByteStarts[i], results.lineByteEnds[i]);
     const matchStart = results.matchStarts[i];
     const matchEnd = results.matchEnds[i];
 
+    const [selStart, selEnd] = selectionBounds(lineContent, matchStart, matchEnd);
+
     const trimmedContent = lineContent.trimStart();
     const indentStripped = lineContent.length - trimmedContent.length;
-
     const matchStartInTrimmed = matchStart - indentStripped;
 
     let displayContent = trimmedContent;
@@ -43,19 +53,15 @@ function resultsToQuickPickItems(results: SearchResults, text: string): QuickPic
     const lineNumberPrefix = `${lineNumberStr}: `;
     const totalPrefixLength = lineNumberPrefix.length + ellipsisPrefix.length;
 
-    const highlights: [number, number][] = [
-      [totalPrefixLength + matchStart - contentOffset, totalPrefixLength + matchEnd - contentOffset],
-    ];
-
     items.push({
       label: `${lineNumberStr}: ${ellipsisPrefix}${displayContent}`,
       description: "",
       picked: i === 0,
       alwaysShow: true,
-      highlights,
+      highlights: [[totalPrefixLength + matchStart - contentOffset, totalPrefixLength + matchEnd - contentOffset]],
       selection: new Selection(
-        new Position(lineNumber, results.selectionStarts[i]),
-        new Position(lineNumber, results.selectionEnds[i])
+        new Position(lineNumber, selStart),
+        new Position(lineNumber, selEnd)
       ),
     });
   }
@@ -65,7 +71,7 @@ function resultsToQuickPickItems(results: SearchResults, text: string): QuickPic
 
 function findInDocument(pattern: string, limit: number): { results: SearchResults; text: string } | null {
   if (pattern.length === 0) {
-    return { results: { count: 0, lineIndices: [], lineByteStarts: [], lineByteEnds: [], matchStarts: [], matchEnds: [], selectionStarts: [], selectionEnds: [] }, text: "" };
+    return { results: { count: 0, lineIndices: [], lineByteStarts: [], lineByteEnds: [], matchStarts: [], matchEnds: [] }, text: "" };
   }
 
   const activeDocument = window.activeTextEditor?.document;
@@ -98,9 +104,8 @@ export function search(pattern: string, limit = DEFAULT_LIMIT): QuickPickLineIte
 
   const { results, text } = found;
   const hasMore = results.count > limit;
-
-  // Slice results if we got more than limit
   const displayCount = hasMore ? limit : results.count;
+
   const displayResults: SearchResults = hasMore
     ? {
         count: displayCount,
@@ -109,8 +114,6 @@ export function search(pattern: string, limit = DEFAULT_LIMIT): QuickPickLineIte
         lineByteEnds: results.lineByteEnds.slice(0, displayCount),
         matchStarts: results.matchStarts.slice(0, displayCount),
         matchEnds: results.matchEnds.slice(0, displayCount),
-        selectionStarts: results.selectionStarts.slice(0, displayCount),
-        selectionEnds: results.selectionEnds.slice(0, displayCount),
       }
     : results;
 

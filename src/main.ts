@@ -12,7 +12,7 @@ import { searchCache } from "./cache";
 import { type QuickPickLineItem, search } from "./search";
 
 const INPUT_PLACEHOLDER = "Please input your search pattern.";
-const LIMIT_STEP = 10_000;
+const LIMIT_STEP = 200;
 
 const COMMANDS = {
   FIND: "needle.find",
