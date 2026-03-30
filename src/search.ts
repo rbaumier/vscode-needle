@@ -5,6 +5,7 @@ import { searchCache } from "./cache";
 export type QuickPickLineItem = QuickPickItem & {
   selection: Selection;
   isMore?: boolean;
+  highlights?: [number, number][];
 };
 
 const DEFAULT_LIMIT = 200;
