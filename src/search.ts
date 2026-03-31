@@ -30,7 +30,7 @@ function resultsToQuickPickItems(results: SearchResults, text: string): QuickPic
   for (let i = 0; i < results.count; i++) {
     const lineNumber = results.lineIndices[i] ?? 0;
     const lineNumberStr = String(lineNumber + 1);
-    const lineContent = text.substring(results.lineByteStarts[i] ?? 0, results.lineByteEnds[i] ?? 0);
+    const lineContent = text.substring(results.lineStarts[i] ?? 0, results.lineEnds[i] ?? 0);
     const matchStart = results.matchStarts[i] ?? 0;
     const matchEnd = results.matchEnds[i] ?? 0;
 
@@ -72,7 +72,7 @@ function resultsToQuickPickItems(results: SearchResults, text: string): QuickPic
 
 function findInDocument(pattern: string, limit: number): { results: SearchResults; text: string } | null {
   if (pattern.length === 0) {
-    return { results: { count: 0, lineIndices: [], lineByteStarts: [], lineByteEnds: [], matchStarts: [], matchEnds: [] }, text: "" };
+    return { results: { count: 0, lineIndices: [], lineStarts: [], lineEnds: [], matchStarts: [], matchEnds: [] }, text: "" };
   }
 
   const activeDocument = window.activeTextEditor?.document;
@@ -88,7 +88,7 @@ function findInDocument(pattern: string, limit: number): { results: SearchResult
     return cached;
   }
 
-  const text = activeDocument.getText();
+  const text = activeDocument.getText().replaceAll("\r\n", "\n");
   const results = searchText(text, pattern, limit + 1);
 
   const entry = { results, text };
@@ -111,8 +111,8 @@ export function search(pattern: string, limit = DEFAULT_LIMIT): QuickPickLineIte
     ? {
         count: displayCount,
         lineIndices: results.lineIndices.slice(0, displayCount),
-        lineByteStarts: results.lineByteStarts.slice(0, displayCount),
-        lineByteEnds: results.lineByteEnds.slice(0, displayCount),
+        lineStarts: results.lineStarts.slice(0, displayCount),
+        lineEnds: results.lineEnds.slice(0, displayCount),
         matchStarts: results.matchStarts.slice(0, displayCount),
         matchEnds: results.matchEnds.slice(0, displayCount),
       }

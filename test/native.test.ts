@@ -12,7 +12,7 @@ describe("searchText", () => {
     expect(r.lineIndices[0]).toBe(1);
     expect(r.matchStarts[0]).toBe(0);
     expect(r.matchEnds[0]).toBe(6);
-    expect(text.substring(r.lineByteStarts[0], r.lineByteEnds[0])).toBe("second line");
+    expect(text.substring(r.lineStarts[0], r.lineEnds[0])).toBe("second line");
   });
 
   test("returns 0 count for no matches", () => {
@@ -162,16 +162,30 @@ describe("searchText flat API", () => {
     expect(r.count).toBe(2);
     expect(r.lineIndices).toEqual([1, 3]);
     expect(r.matchStarts).toEqual([7, 7]);
-    expect(text.substring(r.lineByteStarts[0], r.lineByteEnds[0])).toBe("second foo line");
-    expect(text.substring(r.lineByteStarts[1], r.lineByteEnds[1])).toBe("fourth foo");
+    expect(text.substring(r.lineStarts[0], r.lineEnds[0])).toBe("second foo line");
+    expect(text.substring(r.lineStarts[1], r.lineEnds[1])).toBe("fourth foo");
   });
 
   test("byte offsets work for line extraction", () => {
     const text = "aaa\nbbb foo\nccc\nddd foo";
     const r = searchText(text, "foo", 100);
     for (let i = 0; i < r.count; i++) {
-      const line = text.substring(r.lineByteStarts[i], r.lineByteEnds[i]);
+      const line = text.substring(r.lineStarts[i], r.lineEnds[i]);
       expect(line).toContain("foo");
     }
+  });
+
+  test("CRLF line endings do not leak into line content", () => {
+    const raw = "first line\r\nsecond foo line\r\nthird\r\nfourth foo\r\n";
+    const r = searchText(raw, "foo", 100);
+    expect(r.count).toBe(2);
+    // searchText normalizes \r\n to \n internally — use normalized text for substring
+    const text = raw.replaceAll("\r\n", "\n");
+    const line1 = text.substring(r.lineStarts[0], r.lineEnds[0]);
+    const line2 = text.substring(r.lineStarts[1], r.lineEnds[1]);
+    expect(line1).toBe("second foo line");
+    expect(line2).toBe("fourth foo");
+    expect(line1).not.toContain("\r");
+    expect(line2).not.toContain("\r");
   });
 });

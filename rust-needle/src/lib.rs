@@ -4,14 +4,37 @@ use std::io::{self, BufRead};
 use memchr::memmem;
 use napi_derive::napi;
 
+/// Count UTF-16 code units in a UTF-8 byte slice.
+/// This matches JavaScript's String.length / String.substring() indexing.
+/// Fast path: pure ASCII => byte count == UTF-16 count (zero overhead).
+#[inline]
+fn utf16_len(bytes: &[u8]) -> u32 {
+    if bytes.is_ascii() {
+        return bytes.len() as u32;
+    }
+    std::str::from_utf8(bytes)
+        .map(|s| s.chars().map(|c| c.len_utf16() as u32).sum())
+        .unwrap_or(bytes.len() as u32)
+}
+
+/// Normalize \r\n to \n in-place. Returns the normalized string.
+#[inline]
+fn normalize_crlf(text: String) -> String {
+    if memchr::memchr(b'\r', text.as_bytes()).is_some() {
+        text.replace("\r\n", "\n")
+    } else {
+        text
+    }
+}
+
 /// Flat search results — parallel arrays, no per-match allocations.
-/// Selection bounds are computed TS-side from match offsets + text.
+/// All offsets are UTF-16 code unit offsets (compatible with JS String.substring).
 #[napi(object)]
 pub struct SearchResults {
     pub count: u32,
     pub line_indices: Vec<u32>,
-    pub line_byte_starts: Vec<u32>,
-    pub line_byte_ends: Vec<u32>,
+    pub line_starts: Vec<u32>,
+    pub line_ends: Vec<u32>,
     pub match_starts: Vec<u32>,
     pub match_ends: Vec<u32>,
 }
@@ -21,37 +44,30 @@ impl SearchResults {
         Self {
             count: 0,
             line_indices: Vec::with_capacity(cap),
-            line_byte_starts: Vec::with_capacity(cap),
-            line_byte_ends: Vec::with_capacity(cap),
+            line_starts: Vec::with_capacity(cap),
+            line_ends: Vec::with_capacity(cap),
             match_starts: Vec::with_capacity(cap),
             match_ends: Vec::with_capacity(cap),
         }
     }
 
     #[inline]
-    fn push(
-        &mut self,
-        line_index: u32,
-        line_byte_start: u32,
-        line_byte_end: u32,
-        match_start: u32,
-        match_end: u32,
-    ) {
+    fn push(&mut self, line_index: u32, line_start: u32, line_end: u32, match_start: u32, match_end: u32) {
         self.line_indices.push(line_index);
-        self.line_byte_starts.push(line_byte_start);
-        self.line_byte_ends.push(line_byte_end);
+        self.line_starts.push(line_start);
+        self.line_ends.push(line_end);
         self.match_starts.push(match_start);
         self.match_ends.push(match_end);
         self.count += 1;
     }
 }
 
-/// SIMD byte-level search on a buffer.
-/// Tracks line boundaries incrementally (no memrchr per hit).
+/// SIMD byte-level search on a \n-normalized buffer.
+/// Returns UTF-16 code unit offsets for JS compatibility.
 fn search_bytes_flat(
     buf: &[u8],
     pat_bytes: &[u8],
-    pat_char_len: u32,
+    pat_utf16_len: u32,
     limit: usize,
     case_insensitive: bool,
 ) -> SearchResults {
@@ -62,11 +78,9 @@ fn search_bytes_flat(
     let mut results = SearchResults::with_capacity(limit.min(1000));
     let pat_len = pat_bytes.len();
 
-    // Incremental line counter
     let mut line_count: u32 = 0;
     let mut counted_to: usize = 0;
 
-    // Common hit processing: line boundaries via memrchr/memchr, incremental line count
     let mut process_hit = |hit: usize| -> bool {
         let ls = match memchr::memrchr(b'\n', &buf[..hit]) {
             Some(p) => p + 1,
@@ -77,27 +91,23 @@ fn search_bytes_flat(
             None => buf.len(),
         };
 
-        // Incremental line counting (SIMD memchr_iter on the gap)
+        // Incremental line counting
         if hit > counted_to {
             line_count += memchr::memchr_iter(b'\n', &buf[counted_to..hit]).count() as u32;
             counted_to = hit;
         }
 
-        let byte_in_line = hit - ls;
-        let char_pos = if buf[ls..le].is_ascii() {
-            byte_in_line as u32
-        } else {
-            std::str::from_utf8(&buf[ls..hit])
-                .map(|s| s.chars().count() as u32)
-                .unwrap_or(byte_in_line as u32)
-        };
+        // Convert byte offsets to UTF-16 code unit offsets
+        let utf16_ls = utf16_len(&buf[..ls]);
+        let utf16_line_len = utf16_len(&buf[ls..le]);
+        let utf16_match_pos = utf16_len(&buf[ls..hit]);
 
         results.push(
             line_count,
-            ls as u32,
-            le as u32,
-            char_pos,
-            char_pos + pat_char_len,
+            utf16_ls,
+            utf16_ls + utf16_line_len,
+            utf16_match_pos,
+            utf16_match_pos + pat_utf16_len,
         );
         results.count as usize >= limit
     };
@@ -116,7 +126,6 @@ fn search_bytes_flat(
                 break;
             }
 
-            // Skip to next line
             pos = match memchr::memchr(b'\n', &buf[hit..]) {
                 Some(p) => hit + p + 1,
                 None => buf.len(),
@@ -180,31 +189,27 @@ fn search_bytes_flat(
     results
 }
 
-/// Non-ASCII line-by-line fallback.
+/// Non-ASCII line-by-line fallback. Returns UTF-16 code unit offsets.
 fn search_lines_flat(text: &str, pattern: &str, limit: usize) -> SearchResults {
     let pattern_chars: Vec<char> = pattern
         .chars()
         .map(|c| c.to_lowercase().next().unwrap_or(c))
         .collect();
     let plen = pattern_chars.len();
-    let pat_char_len = plen as u32;
+    let pat_utf16_len: u32 = pattern.chars().map(|c| c.len_utf16() as u32).sum();
     let mut results = SearchResults::with_capacity(limit.min(1000));
-    let mut byte_offset = 0usize;
+    let mut utf16_offset: u32 = 0;
 
     for (idx, line) in text.lines().enumerate() {
         if results.count as usize >= limit {
             break;
         }
 
-        let line_byte_start = byte_offset;
-        let line_byte_end = byte_offset + line.len();
-        // Handle both \n and \r\n line endings
-        byte_offset = line_byte_end
-            + if text.as_bytes().get(line_byte_end) == Some(&b'\r') {
-                2
-            } else {
-                1
-            };
+        let line_utf16_len: u32 = line.chars().map(|c| c.len_utf16() as u32).sum();
+        let line_utf16_start = utf16_offset;
+        let line_utf16_end = utf16_offset + line_utf16_len;
+        // +1 for \n (text is already \r\n-normalized at this point)
+        utf16_offset = line_utf16_end + 1;
 
         let line_chars: Vec<char> = line.chars().collect();
         if plen > line_chars.len() {
@@ -215,10 +220,7 @@ fn search_lines_flat(text: &str, pattern: &str, limit: usize) -> SearchResults {
             for i in 0..=(line_chars.len() - plen) {
                 let mut matched = true;
                 for j in 0..plen {
-                    let lc = line_chars[i + j]
-                        .to_lowercase()
-                        .next()
-                        .unwrap_or(line_chars[i + j]);
+                    let lc = line_chars[i + j].to_lowercase().next().unwrap_or(line_chars[i + j]);
                     if lc != pattern_chars[j] {
                         matched = false;
                         break;
@@ -232,13 +234,17 @@ fn search_lines_flat(text: &str, pattern: &str, limit: usize) -> SearchResults {
         };
 
         if let Some(char_pos) = found {
-            let cp = char_pos as u32;
+            // Convert char position to UTF-16 offset within line
+            let utf16_match_pos: u32 = line_chars[..char_pos]
+                .iter()
+                .map(|c| c.len_utf16() as u32)
+                .sum();
             results.push(
                 idx as u32,
-                line_byte_start as u32,
-                line_byte_end as u32,
-                cp,
-                cp + pat_char_len,
+                line_utf16_start,
+                line_utf16_end,
+                utf16_match_pos,
+                utf16_match_pos + pat_utf16_len,
             );
         }
     }
@@ -246,28 +252,33 @@ fn search_lines_flat(text: &str, pattern: &str, limit: usize) -> SearchResults {
     results
 }
 
+/// Search text buffer (from VS Code getText()). Returns UTF-16 code unit offsets.
 #[napi]
 pub fn search_text(text: String, pattern: String, limit: Option<u32>) -> SearchResults {
     if pattern.is_empty() || text.is_empty() {
         return SearchResults::with_capacity(0);
     }
 
+    // Guard: u32 offset overflow
+    if text.len() > u32::MAX as usize {
+        return SearchResults::with_capacity(0);
+    }
+
     let limit = limit.unwrap_or(100) as usize;
     let case_insensitive = !pattern.chars().any(|c| c.is_uppercase());
 
+    // Normalize \r\n to \n for consistent offset calculation
+    let text = normalize_crlf(text);
+
     if pattern.is_ascii() {
-        return search_bytes_flat(
-            text.as_bytes(),
-            pattern.as_bytes(),
-            pattern.chars().count() as u32,
-            limit,
-            case_insensitive,
-        );
+        let pat_utf16_len = pattern.len() as u32; // ASCII: byte len == UTF-16 len
+        return search_bytes_flat(text.as_bytes(), pattern.as_bytes(), pat_utf16_len, limit, case_insensitive);
     }
 
     search_lines_flat(&text, &pattern, limit)
 }
 
+/// Search file by path. Returns UTF-16 code unit offsets.
 #[napi]
 pub fn search_file(path: String, pattern: String, limit: Option<u32>) -> SearchResults {
     if pattern.is_empty() {
@@ -276,14 +287,13 @@ pub fn search_file(path: String, pattern: String, limit: Option<u32>) -> SearchR
 
     let limit = limit.unwrap_or(100) as usize;
     let case_insensitive = !pattern.chars().any(|c| c.is_uppercase());
-    let pat_char_len = pattern.chars().count() as u32;
 
     let file = match fs::File::open(&path) {
         Ok(f) => f,
         Err(_) => return SearchResults::with_capacity(0),
     };
 
-    // Guard: reject files > 4 GiB (u32 byte offsets would overflow)
+    // Guard: u32 offset overflow for files > 4 GiB
     if let Ok(meta) = file.metadata() {
         if meta.len() > u32::MAX as u64 {
             return SearchResults::with_capacity(0);
@@ -298,21 +308,19 @@ pub fn search_file(path: String, pattern: String, limit: Option<u32>) -> SearchR
             Ok(m) => m,
             Err(_) => return SearchResults::with_capacity(0),
         };
-        return search_bytes_flat(
-            &mmap,
-            pattern.as_bytes(),
-            pat_char_len,
-            limit,
-            case_insensitive,
-        );
+        // Normalize \r\n in mmap buffer — search_bytes_flat expects \n only
+        let buf = if memchr::memchr(b'\r', &mmap).is_some() {
+            std::borrow::Cow::Owned(mmap.iter().copied().filter(|&b| b != b'\r').collect::<Vec<u8>>())
+        } else {
+            std::borrow::Cow::Borrowed(mmap.as_ref())
+        };
+        let pat_utf16_len = pattern.len() as u32;
+        return search_bytes_flat(&buf, pattern.as_bytes(), pat_utf16_len, limit, case_insensitive);
     }
 
+    // Non-ASCII fallback: read + normalize
     let reader = io::BufReader::new(file);
-    let text: String = reader
-        .lines()
-        .map_while(Result::ok)
-        .collect::<Vec<_>>()
-        .join("\n");
+    let text: String = reader.lines().map_while(Result::ok).collect::<Vec<_>>().join("\n");
     search_lines_flat(&text, &pattern, limit)
 }
 
@@ -332,28 +340,22 @@ pub struct SearchMatch {
 fn selection_bounds_ascii(bytes: &[u8], match_start: usize, match_end: usize) -> (u32, u32) {
     let is_word = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
     let mut s = match_start;
-    while s > 0 && is_word(bytes[s - 1]) {
-        s -= 1;
-    }
+    while s > 0 && is_word(bytes[s - 1]) { s -= 1; }
     let mut e = match_end;
-    while e < bytes.len() && is_word(bytes[e]) {
-        e += 1;
-    }
+    while e < bytes.len() && is_word(bytes[e]) { e += 1; }
     (s as u32, e as u32)
 }
 
-fn selection_bounds_unicode(line: &str, match_start: usize, match_end: usize) -> (u32, u32) {
+fn selection_bounds_unicode(chars: &[char], match_start: usize, match_end: usize) -> (u32, u32) {
     let is_word = |c: char| c.is_alphanumeric() || c == '_';
-    let chars: Vec<char> = line.chars().collect();
     let mut s = match_start;
-    while s > 0 && is_word(chars[s - 1]) {
-        s -= 1;
-    }
+    while s > 0 && is_word(chars[s - 1]) { s -= 1; }
     let mut e = match_end;
-    while e < chars.len() && is_word(chars[e]) {
-        e += 1;
-    }
-    (s as u32, e as u32)
+    while e < chars.len() && is_word(chars[e]) { e += 1; }
+    // Convert char positions to UTF-16 offsets
+    let utf16_s: u32 = chars[..s].iter().map(|c| c.len_utf16() as u32).sum();
+    let utf16_e: u32 = chars[..e].iter().map(|c| c.len_utf16() as u32).sum();
+    (utf16_s, utf16_e)
 }
 
 #[napi]
@@ -362,33 +364,37 @@ pub fn search(lines: Vec<String>, pattern: String, limit: Option<u32>) -> Vec<Se
         return vec![];
     }
 
-    let text = lines.join("\n");
-    let limit_val = limit;
-    let case_insensitive = !pattern.chars().any(|c| c.is_uppercase());
-    let results = if pattern.is_ascii() {
-        search_bytes_flat(
-            text.as_bytes(),
-            pattern.as_bytes(),
-            pattern.chars().count() as u32,
-            limit_val.unwrap_or(100) as usize,
-            case_insensitive,
-        )
-    } else {
-        search_lines_flat(&text, &pattern, limit_val.unwrap_or(100) as usize)
-    };
+    let text = normalize_crlf(lines.join("\n"));
+    let results = search_text(text.clone(), pattern, limit);
+    let text_lines: Vec<&str> = text.split('\n').collect();
 
     let mut matches = Vec::with_capacity(results.count as usize);
     for i in 0..results.count as usize {
-        let ls = results.line_byte_starts[i] as usize;
-        let le = (results.line_byte_ends[i] as usize).min(text.len());
-        let line = &text[ls..le];
+        let line_idx = results.line_indices[i] as usize;
+        let line = text_lines.get(line_idx).copied().unwrap_or("");
         let ms = results.match_starts[i] as usize;
         let me = results.match_ends[i] as usize;
 
-        let (ss, se) = if line.is_ascii() {
-            selection_bounds_ascii(line.as_bytes(), ms, me)
+        let line_chars: Vec<char> = line.chars().collect();
+        // Convert UTF-16 offsets to char positions for selection bounds
+        let (char_ms, char_me) = if line.is_ascii() {
+            (ms, me) // ASCII: UTF-16 offset == char position
         } else {
-            selection_bounds_unicode(line, ms, me)
+            // Walk chars accumulating UTF-16 units to find char positions
+            let mut utf16_acc = 0usize;
+            let mut cms = 0usize;
+            let mut cme = 0usize;
+            for (ci, ch) in line_chars.iter().enumerate() {
+                if utf16_acc == ms { cms = ci; }
+                utf16_acc += ch.len_utf16();
+                if utf16_acc == me { cme = ci + 1; }
+            }
+            (cms, cme)
+        };
+        let (ss, se) = if line.is_ascii() {
+            selection_bounds_ascii(line.as_bytes(), char_ms, char_me)
+        } else {
+            selection_bounds_unicode(&line_chars, char_ms, char_me)
         };
 
         matches.push(SearchMatch {
@@ -409,78 +415,32 @@ pub fn search(lines: Vec<String>, pattern: String, limit: Option<u32>) -> Vec<Se
 mod tests {
     use super::*;
 
-    fn assert_match(
-        test_name: &str,
-        line: &str,
-        query: &str,
-        expected_start: u32,
-        expected_end: u32,
-    ) {
+    fn assert_match(test_name: &str, line: &str, query: &str, expected_start: u32, expected_end: u32) {
         let results = search(vec![line.to_string()], query.to_string(), Some(5));
-        assert!(
-            !results.is_empty(),
-            "[{}] Should find match for '{}'",
-            test_name,
-            query
-        );
-        assert_eq!(
-            results[0].match_start, expected_start,
-            "[{}] match_start",
-            test_name
-        );
-        assert_eq!(
-            results[0].match_end, expected_end,
-            "[{}] match_end",
-            test_name
-        );
+        assert!(!results.is_empty(), "[{}] Should find match for '{}'", test_name, query);
+        assert_eq!(results[0].match_start, expected_start, "[{}] match_start", test_name);
+        assert_eq!(results[0].match_end, expected_end, "[{}] match_end", test_name);
     }
 
     fn assert_no_match(test_name: &str, line: &str, query: &str) {
         let results = search(vec![line.to_string()], query.to_string(), Some(5));
-        assert!(
-            results.is_empty(),
-            "[{}] Should NOT find match for '{}'",
-            test_name,
-            query
-        );
+        assert!(results.is_empty(), "[{}] Should NOT find match for '{}'", test_name, query);
     }
 
     #[test]
     fn test_plain_substring_match() {
-        assert_match(
-            "plain substring",
-            "function applySelectionFromItem() {",
-            "apply",
-            9,
-            14,
-        );
+        assert_match("plain substring", "function applySelectionFromItem() {", "apply", 9, 14);
     }
 
     #[test]
     fn test_case_insensitive_by_default() {
-        assert_match(
-            "case insensitive",
-            "function ApplySelection() {",
-            "apply",
-            9,
-            14,
-        );
+        assert_match("case insensitive", "function ApplySelection() {", "apply", 9, 14);
     }
 
     #[test]
     fn test_case_sensitive_when_uppercase_in_query() {
-        assert_match(
-            "case sensitive",
-            "function ApplySelection() {",
-            "Apply",
-            9,
-            14,
-        );
-        assert_no_match(
-            "case sensitive no match",
-            "function applySelection() {",
-            "Apply",
-        );
+        assert_match("case sensitive", "function ApplySelection() {", "Apply", 9, 14);
+        assert_no_match("case sensitive no match", "function applySelection() {", "Apply");
     }
 
     #[test]
@@ -490,20 +450,12 @@ mod tests {
 
     #[test]
     fn test_scattered_chars_do_not_match() {
-        assert_no_match(
-            "scattered2",
-            "export async function applySelectionFromItem(): boolean {",
-            "expfnitem",
-        );
+        assert_no_match("scattered2", "export async function applySelectionFromItem(): boolean {", "expfnitem");
     }
 
     #[test]
     fn test_contiguous_match_in_identifier() {
-        let r = search(
-            vec!["function onDidAccept() {".to_string()],
-            "ondid".to_string(),
-            Some(5),
-        );
+        let r = search(vec!["function onDidAccept() {".to_string()], "ondid".to_string(), Some(5));
         assert!(!r.is_empty());
         assert_eq!(r[0].match_start, 9);
         assert_eq!(r[0].match_end, 14);
@@ -513,8 +465,7 @@ mod tests {
     fn test_selection_bounds_single_word() {
         let r = search(
             vec!["export async function applySelectionFromItem(): boolean {".to_string()],
-            "apply".to_string(),
-            Some(5),
+            "apply".to_string(), Some(5),
         );
         assert!(!r.is_empty());
         assert_eq!(r[0].selection_start, 22);
@@ -523,23 +474,14 @@ mod tests {
 
     #[test]
     fn test_highlights_contiguous() {
-        let r = search(
-            vec!["const foo = bar".to_string()],
-            "foo".to_string(),
-            Some(5),
-        );
+        let r = search(vec!["const foo = bar".to_string()], "foo".to_string(), Some(5));
         assert!(!r.is_empty());
         assert_eq!(r[0].highlights, vec![vec![6, 9]]);
     }
 
     #[test]
     fn test_line_order() {
-        let lines = vec![
-            "third line has foo here".to_string(),
-            "first line".to_string(),
-            "second line with foo".to_string(),
-            "fourth foo line".to_string(),
-        ];
+        let lines = vec!["third line has foo here".to_string(), "first line".to_string(), "second line with foo".to_string(), "fourth foo line".to_string()];
         let r = search(lines, "foo".to_string(), Some(10));
         assert_eq!(r.len(), 3);
         assert_eq!(r[0].line_index, 0);
@@ -566,12 +508,7 @@ mod tests {
 
     #[test]
     fn test_multiline_buffer_search() {
-        let lines = vec![
-            "first line".to_string(),
-            "second line with foo".to_string(),
-            "third line".to_string(),
-            "fourth foo line".to_string(),
-        ];
+        let lines = vec!["first line".to_string(), "second line with foo".to_string(), "third line".to_string(), "fourth foo line".to_string()];
         let r = search(lines, "foo".to_string(), Some(10));
         assert_eq!(r.len(), 2);
         assert_eq!(r[0].line_index, 1);
@@ -581,13 +518,29 @@ mod tests {
 
     #[test]
     fn test_search_text_flat() {
-        let r = search_text(
-            "first line\nsecond foo line\nthird\nfourth foo".to_string(),
-            "foo".to_string(),
-            Some(10),
-        );
+        let r = search_text("first line\nsecond foo line\nthird\nfourth foo".to_string(), "foo".to_string(), Some(10));
         assert_eq!(r.count, 2);
         assert_eq!(r.line_indices, vec![1, 3]);
         assert_eq!(r.match_starts, vec![7, 7]);
+    }
+
+    #[test]
+    fn test_emoji_offsets() {
+        // 🎉 is 1 char in Rust but 2 UTF-16 code units (surrogate pair)
+        let r = search(vec!["🎉 foo".to_string()], "foo".to_string(), Some(5));
+        assert!(!r.is_empty());
+        // "🎉" = 2 UTF-16 code units, " " = 1, so "foo" starts at UTF-16 index 3
+        assert_eq!(r[0].match_start, 3);
+        assert_eq!(r[0].match_end, 6);
+    }
+
+    #[test]
+    fn test_crlf_offsets() {
+        let r = search_text("first\r\nsecond foo\r\nthird".to_string(), "foo".to_string(), Some(10));
+        assert_eq!(r.count, 1);
+        assert_eq!(r.line_indices[0], 1);
+        // After CRLF normalization: "first\nsecond foo\nthird"
+        // "second foo" starts at offset 6, "foo" at offset 13
+        assert_eq!(r.match_starts[0], 7);
     }
 }
