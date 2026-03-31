@@ -3,7 +3,7 @@
   "displayName": "Needle — Find in current file",
   "description": "Fast in-file search powered by Rust. Find any text in the active file instantly.",
   "publisher": "rbaumier",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "license": "MIT",
   "homepage": "https://github.com/rbaumier/vscode-needle",
   "repository": {
